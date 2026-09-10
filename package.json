@@ -1,0 +1,28 @@
+{
+  "name": "internet-change-detector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Internet Change Detector - continuous monitoring, verifiable snapshots and shareable change events for public web pages.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "wrangler d1 migrations apply changedetector --local",
+    "db:migrate:remote": "wrangler d1 migrations apply changedetector --remote",
+    "db:seed:local": "wrangler d1 execute changedetector --local --file=./migrations/0002_seed.sql",
+    "db:seed:remote": "wrangler d1 execute changedetector --remote --file=./migrations/0002_seed.sql",
+    "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed:local",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.20.0"
+  }
+}

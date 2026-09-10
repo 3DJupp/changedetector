@@ -1,0 +1,82 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "changedetector"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# ---------------------------------------------------------------------------
+# Public configuration. Secrets (ADMIN_TOKEN, IPFS_API_TOKEN, RESEND_API_KEY,
+# ANTHROPIC_API_KEY) are set with `wrangler secret put <NAME>`.
+# ---------------------------------------------------------------------------
+[vars]
+PUBLIC_BASE_URL = "http://localhost:8787"
+TOOL_VERSION = "1.0.0"
+USER_AGENT = "ChangeDetectorBot/1.0 (+https://github.com/3DJupp/changedetector; respects robots.txt)"
+# r2 | ipfs-http  — the ContentStore implementation used for snapshot artifacts.
+CONTENT_STORE = "r2"
+# Public gateway used to render "view raw artifact" links. Replaceable.
+IPFS_GATEWAY = "https://ipfs.io/ipfs"
+# Kubo / pinning-service compatible endpoint, used when CONTENT_STORE = "ipfs-http".
+IPFS_API_URL = ""
+# Workers AI model used for change analysis. Empty disables the AI layer.
+AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+AI_EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
+# Max bytes accepted from a monitored page (2 MiB).
+MAX_RESPONSE_BYTES = "2097152"
+# Fetch timeout in milliseconds.
+FETCH_TIMEOUT_MS = "15000"
+# Per-domain minimum spacing between fetches, in seconds.
+DOMAIN_MIN_INTERVAL_S = "20"
+# Interestingness threshold at which a detected change is published publicly.
+PUBLISH_THRESHOLD = "25"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "changedetector"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "00000000000000000000000000000000"
+
+[[r2_buckets]]
+binding = "ARTIFACTS"
+bucket_name = "changedetector-artifacts"
+
+[[queues.producers]]
+binding = "JOBS"
+queue = "changedetector-jobs"
+
+[[queues.consumers]]
+queue = "changedetector-jobs"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+max_concurrency = 4
+dead_letter_queue = "changedetector-jobs-dlq"
+
+[ai]
+binding = "AI"
+
+# Optional: Browser Rendering, used only for JS-heavy pages and OG PNG cards.
+# Uncomment once the account has Browser Rendering enabled.
+# [browser]
+# binding = "BROWSER"
+
+# Optional: Vectorize powers semantic search over change summaries.
+# [[vectorize]]
+# binding = "VECTORS"
+# index_name = "changedetector-changes"
+
+[triggers]
+# Scheduler sweep: picks due sites and enqueues crawl jobs.
+# Daily digest at 07:00 UTC.
+crons = ["*/5 * * * *", "0 7 * * *"]
+
+[observability]
+enabled = true
+
+[placement]
+mode = "smart"

@@ -1,0 +1,44 @@
+# Local development stack.
+#
+#   docker compose up            → the Worker on http://localhost:8787
+#   docker compose --profile ipfs up
+#                                → adds a local IPFS (Kubo) node so snapshot
+#                                  artifacts are pinned to a real IPFS daemon
+#
+# D1, R2, KV and Queues all run locally inside workerd (Miniflare); state lives
+# in ./.wrangler/state and survives restarts.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    volumes:
+      - .:/app
+      - node_modules:/app/node_modules
+    environment:
+      # Point the ContentStore at the local IPFS node when the ipfs profile is up.
+      - IPFS_API_URL=${IPFS_API_URL:-}
+      - IPFS_GATEWAY=${IPFS_GATEWAY:-http://localhost:8080/ipfs}
+    command: >
+      sh -c "npm install --no-audit --no-fund &&
+             npx wrangler d1 migrations apply changedetector --local &&
+             npx wrangler dev --ip 0.0.0.0 --port 8787"
+
+  ipfs:
+    profiles: ["ipfs"]
+    image: ipfs/kubo:latest
+    ports:
+      - "5001:5001"   # RPC API — set IPFS_API_URL=http://ipfs:5001
+      - "8080:8080"   # gateway
+      - "4001:4001"   # swarm
+    volumes:
+      - ipfs_data:/data/ipfs
+    environment:
+      - IPFS_PROFILE=server
+
+volumes:
+  node_modules:
+  ipfs_data:
