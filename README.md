@@ -182,16 +182,23 @@ npm run db:migrate:local
 npm run dev                             # http://localhost:8787
 ```
 
+`npm run dev` runs fully local and needs no Cloudflare login. Workers AI only
+exists remotely, so the AI layer is skipped and headlines come from the
+heuristics. To try it with real Workers AI, run `npx wrangler login` and then
+`npm run dev:remote-ai`.
+
 Then, in another terminal:
 
 ```bash
 # Generate demo change events through the real pipeline (no network needed)
-curl -X POST localhost:8787/admin/demo -H "authorization: Bearer dev-admin-token"
+curl -X POST localhost:8787/admin/demo -H "authorization: Bearer dev-admin-token-change-me"
 
-# Or load the curated seed list and crawl for real (run it a few times; it works
-# in batches so no single request runs long)
-curl -X POST localhost:8787/admin/seed  -H "authorization: Bearer dev-admin-token"
-curl -X POST localhost:8787/admin/sweep -H "authorization: Bearer dev-admin-token"
+# Or load the curated seed list and crawl for real. Either straight into D1:
+npm run db:seed:local
+# ...or through the API, which also checks robots.txt up front (run it until it
+# says the list is complete; it works in batches so no request runs long):
+curl -X POST localhost:8787/admin/seed  -H "authorization: Bearer dev-admin-token-change-me"
+curl -X POST localhost:8787/admin/sweep -H "authorization: Bearer dev-admin-token-change-me"
 ```
 
 Open http://localhost:8787 — the feed, a change page, its diff, the snapshot
@@ -268,12 +275,19 @@ GET    /api/snapshots/:id/artifact.car
 GET    /api/search?q=pricing
 GET    /api/stats
 GET    /api/digest/:day
-POST   /api/subscriptions        {email, siteId? | category?, minScore?}
+POST   /api/subscriptions        {email, siteId? | category? | digest?, minScore?}  → 202, confirm by email
 POST   /api/sites                {url, category, interval, priority}      🔒
 POST   /api/sites/:id/crawl                                               🔒
 PATCH  /api/sites/:id                                                     🔒
 DELETE /api/sites/:id                                                     🔒
 ```
+
+Subscriptions use double opt-in. Every request sends a confirmation link
+(at most one per address every ten minutes) and nothing is delivered until it is
+clicked, also for addresses that confirmed before, so nobody can attach
+subscriptions to someone else's inbox. Every email carries an unsubscribe link
+and RFC 8058 one-click `List-Unsubscribe` headers; `/unsubscribe?token=…`
+switches everything off.
 
 Feeds: `/rss.xml`, `/rss.xml?category=Pricing`, `/sites/:id/rss.xml`, `/digest.xml`.
 

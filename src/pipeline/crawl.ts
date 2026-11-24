@@ -4,6 +4,7 @@
  * Runs inside a queue consumer, never inside a user-facing HTTP request.
  */
 import type { Env, MonitoredSite, Snapshot } from '../types';
+import { indexChangeVector } from '../lib/semantic';
 import { Repo, now } from '../db/repo';
 import { computeBackoffSeconds, fetchPage, FetchFailure, parseRetryAfter, throttleDomain } from '../lib/fetcher';
 import { UrlNotAllowed } from '../lib/urlguard';
@@ -446,6 +447,7 @@ export async function processCapture(
   });
 
   await repo.indexChange(change, site);
+  await indexChangeVector(env, change, site).catch((error) => console.error('vector index failed', error));
   await repo.updateSite(site.id, {
     last_changed_at: startedAt,
     change_count: site.change_count + 1,

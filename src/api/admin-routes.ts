@@ -1,5 +1,7 @@
 /** The monitoring console: form-driven admin actions. */
 import seedSites from '../../seed/sites.json';
+import { canonicalizeUrl } from '../lib/urlguard';
+import { removeChangeVector } from '../lib/semantic';
 import { Ctx, readBody, redirect, Router } from '../router';
 import { html } from '../ui/layout';
 import { adminPage } from '../ui/pages/admin';
@@ -26,6 +28,8 @@ async function guard(ctx: Ctx): Promise<Response | null> {
 function back(message: string, error = false): Response {
   return redirect(`/admin?${error ? 'error' : 'message'}=${encodeURIComponent(message)}`);
 }
+
+const SEED_BATCH = 40;
 
 export function registerAdminRoutes(router: Router): void {
   router.get('/admin', async (ctx) => {
@@ -120,6 +124,7 @@ export function registerAdminRoutes(router: Router): void {
     const change = await ctx.repo.getChange(ctx.params.id);
     if (!change) return back('Change not found', true);
     await ctx.repo.updateChange(change.id, { false_positive: 1, published: 0 });
+    await removeChangeVector(ctx.env, change.id);
     await ctx.repo.bumpMetric('false_positives');
     return back('Marked as a false positive and unpublished');
   });
@@ -130,13 +135,15 @@ export function registerAdminRoutes(router: Router): void {
     const entries = seedSites as SeedEntry[];
     let added = 0;
     let skipped = 0;
+    let attempts = 0;
     // Bounded per request so one invocation never runs long; re-run to continue.
-    for (const entry of entries.slice(0, 60)) {
-      const existing = await ctx.repo.getSiteByCanonical(entry.url.replace(/\/$/, ''));
-      if (existing) {
-        skipped++;
-        continue;
-      }
+    // Entries already present are cheap to skip, so only real attempts (which
+    // fetch robots.txt) count against the budget.
+    for (const entry of entries) {
+      if (attempts >= SEED_BATCH) break;
+      const existing = await ctx.repo.getSiteByCanonical(canonicalizeUrl(entry.url));
+      if (existing) continue;
+      attempts++;
       const result = await addSite(ctx.env, ctx.repo, {
         url: entry.url,
         title: entry.title,
@@ -147,7 +154,8 @@ export function registerAdminRoutes(router: Router): void {
       if (result.ok) added++;
       else skipped++;
     }
-    return back(`Seed run complete: ${added} added, ${skipped} skipped (already present, or blocked by robots.txt). Run again to continue.`);
+    const remaining = attempts >= SEED_BATCH ? ' Run again to continue.' : ' The seed list is complete.';
+    return back(`Seed run: ${added} added, ${skipped} not added (blocked by robots.txt or invalid).${remaining}`);
   });
 
   router.post('/admin/demo', async (ctx) => {

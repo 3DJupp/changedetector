@@ -57,6 +57,8 @@ max_retries = 3
 max_concurrency = 4
 dead_letter_queue = "changedetector-jobs-dlq"
 
+# Workers AI only runs remotely. `npm run dev` uses --local and skips it;
+# `npm run dev:remote-ai` uses it (needs `wrangler login`).
 [ai]
 binding = "AI"
 
@@ -66,6 +68,7 @@ binding = "AI"
 # binding = "BROWSER"
 
 # Optional: Vectorize powers semantic search over change summaries.
+# Create with: npx wrangler vectorize create changedetector-changes --dimensions=768 --metric=cosine
 # [[vectorize]]
 # binding = "VECTORS"
 # index_name = "changedetector-changes"

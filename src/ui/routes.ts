@@ -23,6 +23,7 @@ import { buildDigest } from '../pipeline/digest';
 import { diffLines, buildRows, buildHunks, computeStats } from '../lib/diff';
 import { decodeBody } from '../pipeline/crawl';
 import { escapeHtml } from '../lib/html';
+import { hybridSearch } from '../lib/semantic';
 
 function safeParse<T>(value: string | null, fallback: T): T {
   if (!value) return fallback;
@@ -343,7 +344,7 @@ export function registerUiRoutes(router: Router): void {
     const query = (ctx.url.searchParams.get('q') ?? '').slice(0, 120);
     const category = ctx.url.searchParams.get('category') || 'All';
     const results = query
-      ? (await ctx.repo.searchChanges(query, { category, limit: 40 })).changes
+      ? (await hybridSearch(ctx.env, ctx.repo, query, { category, limit: 40 })).changes
       : (await ctx.repo.listChanges({ category, order: 'recent', limit: 40 })).changes;
     const counts = await ctx.repo.categoryCounts();
     const facets = [
@@ -446,7 +447,7 @@ export function registerUiRoutes(router: Router): void {
 
   router.get('/robots.txt', async (ctx) =>
     new Response(
-      `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /snapshots/*/raw\nDisallow: /search\n\nSitemap: ${ctx.baseUrl}/sitemap.xml\n`,
+      `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /snapshots/*/raw\nDisallow: /search\nDisallow: /confirm\nDisallow: /unsubscribe\n\nSitemap: ${ctx.baseUrl}/sitemap.xml\n`,
       { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=86400' } },
     ),
   );

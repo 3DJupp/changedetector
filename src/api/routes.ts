@@ -8,6 +8,10 @@ import { enqueue } from '../pipeline/scheduler';
 import { rawR2Store, createContentStore } from '../store';
 import { sha256Hex } from '../lib/hash';
 import { buildDigest } from '../pipeline/digest';
+import { hybridSearch } from '../lib/semantic';
+import { confirmationHtml, sendEmail } from '../pipeline/notify';
+import { html } from '../ui/layout';
+import { confirmPage, subscribeResultPage, unsubscribePage } from '../ui/pages/subscription';
 
 const CACHE_SHORT = 60;
 const CACHE_LONG = 3600;
@@ -329,11 +333,11 @@ export function registerApiRoutes(router: Router): void {
   // --- search, stats, digest ---------------------------------------------
   router.get('/api/search', async (ctx) => {
     const query = ctx.url.searchParams.get('q') ?? '';
-    const { changes } = await ctx.repo.searchChanges(query, {
+    const { changes, semantic } = await hybridSearch(ctx.env, ctx.repo, query.slice(0, 120), {
       category: ctx.url.searchParams.get('category') ?? undefined,
-      limit: Number.parseInt(ctx.url.searchParams.get('limit') ?? '40', 10),
+      limit: Number.parseInt(ctx.url.searchParams.get('limit') ?? '40', 10) || 40,
     });
-    return json({ query, count: changes.length, changes: changes.map((change) => changeDto(change, ctx.baseUrl)) }, {}, CACHE_SHORT);
+    return json({ query, count: changes.length, semanticMatches: semantic, changes: changes.map((change) => changeDto(change, ctx.baseUrl)) }, {}, CACHE_SHORT);
   });
 
   router.get('/api/stats', async (ctx) => {
@@ -371,31 +375,119 @@ export function registerApiRoutes(router: Router): void {
   // --- subscriptions ------------------------------------------------------
   router.post('/api/subscriptions', async (ctx) => {
     const body = await readBody(ctx.request);
-    const email = (body.email ?? '').trim().toLowerCase();
+    const asHtml = wantsHtml(ctx.request);
+    const back = backTarget(ctx);
+    const fail = (status: number, message: string) =>
+      asHtml
+        ? html(subscribeResultPage({ baseUrl: ctx.baseUrl, ok: false, message, back }), status)
+        : problem(status, message);
+
+    const email = String(body.email ?? '').trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email) || email.length > 190) {
-      return wantsHtml(ctx.request)
-        ? redirectBack(ctx, 'Enter a valid email address')
-        : problem(400, 'A valid email address is required');
+      return fail(400, 'Enter a valid email address.');
     }
+    const siteId = body.siteId ? String(body.siteId) : null;
+    const category = body.category && CATEGORIES.includes(body.category as never) ? String(body.category) : null;
+    const digest = ['1', 'true', 'on', 'yes'].includes(String(body.digest ?? '').toLowerCase());
+    if (!siteId && !category && !digest) {
+      return fail(400, 'Choose a page, a category or the daily digest to subscribe to.');
+    }
+    if (siteId && !(await ctx.repo.getSite(siteId))) return fail(404, 'That page is not monitored.');
+
     const user = await ctx.repo.upsertUser(email);
-    const siteId = body.siteId || null;
-    const category = body.category && CATEGORIES.includes(body.category as never) ? body.category : null;
-    if (siteId) {
-      const site = await ctx.repo.getSite(siteId);
-      if (!site) return problem(404, 'Site not found');
+    const minScore = Math.min(100, Math.max(0, Number.parseInt(String(body.minScore ?? '40'), 10) || 40));
+    if (siteId || category) {
+      await ctx.repo.createSubscription({ userId: user.id, siteId, category: siteId ? null : category, minScore, channel: 'EMAIL' });
     }
-    await ctx.repo.createSubscription({
-      userId: user.id,
-      siteId,
-      category: siteId ? null : category,
-      minScore: Number.parseInt(body.minScore ?? '40', 10) || 40,
-      channel: 'EMAIL',
-    });
-    if (wantsHtml(ctx.request)) {
-      return redirectBack(ctx, 'Subscribed. You will get an email when something meaningful changes.');
+    if (digest) await ctx.repo.requestDigest(user.id);
+
+    // Every request needs a click in the inbox, also for confirmed addresses, so
+    // nobody can attach subscriptions to someone else's address. One email per
+    // ten minutes per address; the link in it confirms everything pending.
+    let delivery: 'sent' | 'throttled' | 'unavailable' = 'throttled';
+    const nowS = Math.floor(Date.now() / 1000);
+    if (!user.confirm_sent_at || nowS - user.confirm_sent_at > CONFIRM_THROTTLE_S) {
+      try {
+        await sendEmail(ctx.env, email, 'Confirm your subscription', confirmationHtml(ctx.env, user.token));
+        await ctx.repo.markConfirmSent(user.id);
+        delivery = 'sent';
+      } catch (error) {
+        delivery = 'unavailable';
+        if (!ctx.env.RESEND_API_KEY) {
+          // Development without an email provider: the link is the only way to confirm.
+          console.log(`[dev] confirmation link for ${email}: ${ctx.baseUrl}/confirm?token=${user.token}`);
+        } else {
+          console.error('confirmation email failed', error);
+        }
+      }
     }
-    return json({ subscribed: true, email, siteId, category }, { status: 201 });
+
+    const message =
+      'We sent a confirmation link to that address. Nothing is sent until it is clicked. If you asked within the last few minutes, use the link from the earlier email, it confirms this request too.';
+    if (asHtml) {
+      return html(
+        subscribeResultPage({ baseUrl: ctx.baseUrl, ok: true, message, deliveryUnavailable: delivery === 'unavailable' && !ctx.env.RESEND_API_KEY, back }),
+        202,
+      );
+    }
+    // The response is the same for new and known addresses, so it does not reveal who is subscribed.
+    return json({ accepted: true, confirmation: 'required' }, { status: 202 });
   });
+
+  router.get('/confirm', async (ctx) => {
+    const token = ctx.url.searchParams.get('token') ?? '';
+    const user = await ctx.repo.getUserByToken(token);
+    return html(confirmPage({ baseUrl: ctx.baseUrl, token, state: user ? 'ask' : 'invalid' }), user ? 200 : 404, NO_STORE);
+  });
+
+  router.post('/confirm', async (ctx) => {
+    const body = await readBody(ctx.request);
+    const token = String(body.token ?? ctx.url.searchParams.get('token') ?? '');
+    const user = await ctx.repo.getUserByToken(token);
+    if (!user) return html(confirmPage({ baseUrl: ctx.baseUrl, token, state: 'invalid' }), 404, NO_STORE);
+    const { activated } = await ctx.repo.confirmUser(user.id);
+    return html(confirmPage({ baseUrl: ctx.baseUrl, token, state: 'done', activated }), 200, NO_STORE);
+  });
+
+  router.get('/unsubscribe', async (ctx) => {
+    const token = ctx.url.searchParams.get('token') ?? '';
+    const user = await ctx.repo.getUserByToken(token);
+    if (!user) return html(unsubscribePage({ baseUrl: ctx.baseUrl, token, state: 'invalid' }), 404, NO_STORE);
+    const subscriptions = await ctx.repo.subscriptionsFor(user.id);
+    return html(
+      unsubscribePage({ baseUrl: ctx.baseUrl, token, state: 'ask', email: user.email, digest: user.digest_optin > 0, subscriptions }),
+      200,
+      NO_STORE,
+    );
+  });
+
+  // Handles both the form above and RFC 8058 one-click requests from mail clients.
+  router.post('/unsubscribe', async (ctx) => {
+    const body = await readBody(ctx.request);
+    const token = String(ctx.url.searchParams.get('token') ?? body.token ?? '');
+    const user = await ctx.repo.getUserByToken(token);
+    const oneClick = String(body['List-Unsubscribe'] ?? '') === 'One-Click';
+    if (!user) {
+      return oneClick
+        ? new Response('unknown token', { status: 404 })
+        : html(unsubscribePage({ baseUrl: ctx.baseUrl, token, state: 'invalid' }), 404, NO_STORE);
+    }
+    await ctx.repo.unsubscribeAll(user.id);
+    return oneClick
+      ? new Response('unsubscribed', { status: 200 })
+      : html(unsubscribePage({ baseUrl: ctx.baseUrl, token, state: 'done' }), 200, NO_STORE);
+  });
+}
+
+const CONFIRM_THROTTLE_S = 600;
+const NO_STORE = { 'cache-control': 'no-store' };
+
+function backTarget(ctx: Ctx): string {
+  const referer = ctx.request.headers.get('referer');
+  if (!referer || !referer.startsWith(ctx.baseUrl)) return '/';
+  const url = new URL(referer);
+  url.searchParams.delete('notice');
+  return url.pathname + url.search;
 }
 
 function safeParse(value: string | null): unknown {
@@ -409,12 +501,4 @@ function safeParse(value: string | null): unknown {
 
 function wantsHtml(request: Request): boolean {
   return (request.headers.get('accept') ?? '').includes('text/html');
-}
-
-function redirectBack(ctx: Ctx, message: string): Response {
-  const referer = ctx.request.headers.get('referer');
-  const target = referer && referer.startsWith(ctx.baseUrl) ? referer : `${ctx.baseUrl}/`;
-  const url = new URL(target);
-  url.searchParams.set('notice', message);
-  return new Response(null, { status: 303, headers: { location: url.toString() } });
 }

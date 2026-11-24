@@ -77,7 +77,9 @@ npm run deploy
 BASE=https://changes.example.com
 TOKEN=<your admin token>
 
-# The seed endpoint works in batches of 60 so no single request runs long.
+# The seed endpoint works in batches of 40 new sites so no single request runs
+# long. Repeat until it reports that the seed list is complete.
+# (Alternatively: `npm run db:seed:remote` writes the list straight into D1.)
 # Run it a few times until it reports 0 added.
 curl -X POST $BASE/admin/seed -H "authorization: Bearer $TOKEN"
 curl -X POST $BASE/admin/seed -H "authorization: Bearer $TOKEN"
@@ -197,3 +199,20 @@ actually changed.
 **Backups.** D1 supports time travel (`wrangler d1 time-travel`). The artifacts
 in R2 are immutable and content-addressed, so they only ever need to be copied,
 never reconciled.
+
+## Semantic search (optional)
+
+Search is full-text (SQLite FTS5) out of the box. With a Vectorize index,
+published changes are also embedded with `AI_EMBEDDING_MODEL` and search adds
+meaning-based matches below the keyword hits, so "price hike" finds
+"Pro plan went from $19 to $24".
+
+```bash
+# bge-base-en-v1.5 produces 768-dimensional vectors
+npx wrangler vectorize create changedetector-changes --dimensions=768 --metric=cosine
+```
+
+Then uncomment the `[[vectorize]]` block in `wrangler.toml` and deploy. Only
+changes detected after that are indexed. `/api/search` reports how many results
+came from the semantic layer in `semanticMatches`.
+

@@ -84,7 +84,15 @@ export default {
       // 07:00 UTC: build and send the daily digest. Every sweep: crawl what is due.
       const isDigestHour = event.cron === '0 7 * * *';
       if (isDigestHour) {
-        await buildDigest(env, repo).catch((error) => console.error('digest failed', error));
+        try {
+          const digest = await buildDigest(env, repo);
+          if (digest.changeIds.length) {
+            const queued = await repo.queueDigestNotifications(digest.day);
+            console.log('digest queued', digest.day, queued);
+          }
+        } catch (error) {
+          console.error('digest failed', error);
+        }
       }
       const result = await sweep(env, repo, executionCtx);
       console.log('sweep', JSON.stringify(result));

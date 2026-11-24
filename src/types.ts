@@ -10,6 +10,8 @@ export interface Env {
   AI?: { run: (model: string, input: unknown) => Promise<any> };
   /** Browser Rendering binding, used only for JS-heavy pages and OG cards. */
   BROWSER?: unknown;
+  /** Vectorize index for semantic search. Optional: search falls back to full text only. */
+  VECTORS?: VectorizeIndex;
 
   // --- Vars ---------------------------------------------------------------
   PUBLIC_BASE_URL: string;

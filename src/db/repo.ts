@@ -360,6 +360,31 @@ export class Repo {
     };
   }
 
+  /** Published changes by id, in the order given. Used to hydrate semantic search hits. */
+  async changesByIds(ids: string[], category?: string) {
+    if (!ids.length) return [];
+    const byCategory = category && category !== 'All';
+    const rows = await this.db
+      .prepare(
+        `SELECT c.*, s.title AS site_title, s.canonical_url AS site_url, s.category AS site_category,
+                s.host AS site_host, s.id AS site_pk, cur.cid AS current_cid
+         FROM change_events c
+         JOIN monitored_sites s ON s.id = c.site_id
+         LEFT JOIN snapshots cur ON cur.id = c.current_snapshot_id
+         WHERE c.id IN (${ids.map(() => '?').join(',')}) AND c.published = 1 AND c.false_positive = 0
+         ${byCategory ? 'AND s.category = ?' : ''}`,
+      )
+      .bind(...ids, ...(byCategory ? [category] : []))
+      .all<ChangeEvent & Record<string, string>>();
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return (rows.results ?? [])
+      .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+      .map((row) => ({
+        ...row,
+        site: { id: row.site_pk, title: row.site_title, canonical_url: row.site_url, category: row.site_category, host: row.site_host },
+      }));
+  }
+
   // --- crawl logs & metrics ----------------------------------------------
 
   async logCrawl(input: {
@@ -485,19 +510,85 @@ export class Repo {
 
   // --- users, subscriptions, notifications --------------------------------
 
-  async upsertUser(email: string): Promise<{ id: string; token: string; created: boolean }> {
+  async upsertUser(email: string): Promise<SubscriberUser & { created: boolean }> {
     const existing = await this.db
-      .prepare('SELECT id, token FROM users WHERE email = ?')
+      .prepare('SELECT id, email, token, verified, digest_optin, confirm_sent_at FROM users WHERE email = ?')
       .bind(email)
-      .first<{ id: string; token: string }>();
+      .first<SubscriberUser>();
     if (existing) return { ...existing, created: false };
     const id = newId('usr');
     const token = newId('tok').replace('tok_', '');
     await this.db
-      .prepare('INSERT INTO users (id, email, verified, token, digest_optin, created_at) VALUES (?,?,0,?,1,?)')
+      .prepare('INSERT INTO users (id, email, verified, token, digest_optin, created_at) VALUES (?,?,0,?,0,?)')
       .bind(id, email, token, now())
       .run();
-    return { id, token, created: true };
+    return { id, email, token, verified: 0, digest_optin: 0, confirm_sent_at: null, created: true };
+  }
+
+  async getUserByToken(token: string): Promise<SubscriberUser | null> {
+    if (!/^[0-9a-f]{16,64}$/.test(token)) return null;
+    return this.db
+      .prepare('SELECT id, email, token, verified, digest_optin, confirm_sent_at FROM users WHERE token = ?')
+      .bind(token)
+      .first<SubscriberUser>();
+  }
+
+  /** Marks the digest as requested; it switches on when the address is confirmed. */
+  async requestDigest(userId: string): Promise<void> {
+    await this.db.prepare('UPDATE users SET digest_optin = 2 WHERE id = ? AND digest_optin = 0').bind(userId).run();
+  }
+
+  async markConfirmSent(userId: string): Promise<void> {
+    await this.db.prepare('UPDATE users SET confirm_sent_at = ? WHERE id = ?').bind(now(), userId).run();
+  }
+
+  /** Confirms the address and activates everything it requested so far. */
+  async confirmUser(userId: string): Promise<{ activated: number }> {
+    const results = await this.db.batch([
+      this.db.prepare('UPDATE users SET verified = 1, digest_optin = CASE WHEN digest_optin = 2 THEN 1 ELSE digest_optin END WHERE id = ?').bind(userId),
+      this.db.prepare('UPDATE subscriptions SET pending = 0 WHERE user_id = ? AND pending = 1').bind(userId),
+    ]);
+    return { activated: results[1]?.meta?.changes ?? 0 };
+  }
+
+  /** Removes every subscription and the digest opt-in. The address row stays so the token keeps working. */
+  async unsubscribeAll(userId: string): Promise<number> {
+    const result = await this.db.prepare('DELETE FROM subscriptions WHERE user_id = ?').bind(userId).run();
+    await this.db.prepare('UPDATE users SET digest_optin = 0 WHERE id = ?').bind(userId).run();
+    await this.db
+      .prepare("UPDATE notifications SET status = 'SKIPPED', error = 'unsubscribed' WHERE user_id = ? AND status = 'PENDING'")
+      .bind(userId)
+      .run();
+    return result.meta?.changes ?? 0;
+  }
+
+  async subscriptionsFor(userId: string) {
+    const rows = await this.db
+      .prepare(
+        `SELECT sub.id, sub.site_id, sub.category, sub.min_score, sub.pending, s.title AS site_title, s.canonical_url
+         FROM subscriptions sub LEFT JOIN monitored_sites s ON s.id = sub.site_id
+         WHERE sub.user_id = ? ORDER BY sub.created_at`,
+      )
+      .bind(userId)
+      .all<{ id: string; site_id: string | null; category: string | null; min_score: number; pending: number; site_title: string | null; canonical_url: string | null }>();
+    return rows.results ?? [];
+  }
+
+  /** Queues one digest email per confirmed, opted-in address. Idempotent per day. */
+  async queueDigestNotifications(day: string): Promise<number> {
+    const result = await this.db
+      .prepare(
+        `INSERT INTO notifications (id, user_id, change_id, channel, status, created_at, payload)
+         SELECT 'ntf_' || lower(hex(randomblob(12))), u.id, NULL, 'DIGEST', 'PENDING', ?, ?
+         FROM users u
+         WHERE u.verified = 1 AND u.digest_optin = 1
+           AND NOT EXISTS (
+             SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.channel = 'DIGEST' AND n.payload = ?
+           )`,
+      )
+      .bind(now(), day, day)
+      .run();
+    return result.meta?.changes ?? 0;
   }
 
   async createSubscription(input: {
@@ -511,8 +602,8 @@ export class Repo {
     const id = newId('sub');
     await this.db
       .prepare(
-        `INSERT INTO subscriptions (id, user_id, site_id, category, min_score, channel, target, created_at)
-         VALUES (?,?,?,?,?,?,?,?)
+        `INSERT INTO subscriptions (id, user_id, site_id, category, min_score, channel, target, created_at, pending)
+         VALUES (?,?,?,?,?,?,?,?,1)
          ON CONFLICT DO NOTHING`,
       )
       .bind(
@@ -528,7 +619,7 @@ export class Repo {
       .prepare(
         `SELECT DISTINCT u.id AS user_id, u.email, u.token, sub.channel, sub.target
          FROM subscriptions sub JOIN users u ON u.id = sub.user_id
-         WHERE ((sub.site_id = ?) OR (sub.category = ?)) AND sub.min_score <= ?`,
+         WHERE ((sub.site_id = ?) OR (sub.category = ?)) AND sub.min_score <= ? AND sub.pending = 0 AND u.verified = 1`,
       )
       .bind(siteId, category, score)
       .all<{ user_id: string; email: string; token: string; channel: string; target: string | null }>();
@@ -545,10 +636,10 @@ export class Repo {
   async pendingNotifications(limit = 50) {
     const rows = await this.db
       .prepare(
-        `SELECT n.*, u.email, u.token, c.headline, c.slug, c.summary
+        `SELECT n.*, u.email, u.token, u.verified, c.headline, c.slug, c.summary
          FROM notifications n
          LEFT JOIN users u ON u.id = n.user_id
-         JOIN change_events c ON c.id = n.change_id
+         LEFT JOIN change_events c ON c.id = n.change_id
          WHERE n.status = 'PENDING' AND n.attempts < 5 ORDER BY n.created_at LIMIT ?`,
       )
       .bind(limit)
@@ -583,6 +674,15 @@ export class Repo {
       stats: string;
     }>();
   }
+}
+
+export interface SubscriberUser {
+  id: string;
+  email: string;
+  token: string;
+  verified: number;
+  digest_optin: number;
+  confirm_sent_at: number | null;
 }
 
 export function repo(env: Env): Repo {
