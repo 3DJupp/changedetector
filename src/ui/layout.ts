@@ -107,7 +107,7 @@ ${options.body}
       <span class="dim" style="font-size:11.5px">Snapshots are content-addressed and hash-verifiable. Availability depends on pinned replicas, not on IPFS alone.</span>
     </div>
     <div style="display:flex;gap:16px;flex-wrap:wrap">
-      <a href="/rss.xml">RSS</a><a href="/api">API</a><a href="/about">About</a><a href="/digest">Daily digest</a>
+      <a href="/rss.xml">RSS</a><a href="/api">API</a><a href="/about">About</a><a href="/digest">Daily digest</a><a href="/suggest">Suggest a page</a>
     </div>
   </div>
 </footer>
@@ -122,6 +122,10 @@ export function html(body: string, status = 200, extraHeaders: Record<string, st
       'content-type': 'text/html; charset=utf-8',
       'x-content-type-options': 'nosniff',
       'referrer-policy': 'strict-origin-when-cross-origin',
+      // Pages must not be framed by other sites (clickjacking on the forms).
+      // The embeddable card is served separately and allows framing.
+      'x-frame-options': 'DENY',
+      'content-security-policy': "frame-ancestors 'none'",
       ...extraHeaders,
     },
   });

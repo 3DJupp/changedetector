@@ -34,11 +34,12 @@ const SEED_BATCH = 40;
 export function registerAdminRoutes(router: Router): void {
   router.get('/admin', async (ctx) => {
     const authed = await isAdmin(ctx.request, ctx.env);
-    const [{ sites, total }, stats, logs, due] = await Promise.all([
+    const [{ sites, total }, stats, logs, due, suggestions] = await Promise.all([
       ctx.repo.listSites({ limit: 200, q: ctx.url.searchParams.get('q') ?? undefined }),
       ctx.repo.stats(),
       ctx.repo.recentCrawlLogs(25),
       ctx.repo.dueSites(500),
+      authed ? ctx.repo.pendingSuggestions(50) : Promise.resolve([]),
     ]);
     return html(
       adminPage({
@@ -51,6 +52,7 @@ export function registerAdminRoutes(router: Router): void {
         message: ctx.url.searchParams.get('message') ?? undefined,
         error: ctx.url.searchParams.get('error') ?? undefined,
         authed,
+        suggestions,
       }),
       200,
       { 'cache-control': 'no-store' },
@@ -127,6 +129,37 @@ export function registerAdminRoutes(router: Router): void {
     await removeChangeVector(ctx.env, change.id);
     await ctx.repo.bumpMetric('false_positives');
     return back('Marked as a false positive and unpublished');
+  });
+
+  router.post('/admin/suggestions/:id/approve', async (ctx) => {
+    const denied = await guard(ctx);
+    if (denied) return denied;
+    const suggestion = await ctx.repo.getSuggestion(ctx.params.id);
+    if (!suggestion || suggestion.status !== 'PENDING') return back('That suggestion is no longer pending', true);
+    const body = await readBody(ctx.request);
+    const result = await addSite(ctx.env, ctx.repo, {
+      url: suggestion.url,
+      category: body.category || suggestion.category || undefined,
+      interval: body.interval || '6h',
+    });
+    if (result.ok && result.site) {
+      await ctx.repo.decideSuggestion(suggestion.id, 'APPROVED', result.site.id);
+      return back(`Now monitoring ${result.site.canonical_url}`);
+    }
+    if (result.reason === 'duplicate' && result.site) {
+      await ctx.repo.decideSuggestion(suggestion.id, 'APPROVED', result.site.id);
+      return back('That page was already monitored; suggestion closed');
+    }
+    return back(`Could not add the page: ${result.error ?? 'unknown error'}`, true);
+  });
+
+  router.post('/admin/suggestions/:id/reject', async (ctx) => {
+    const denied = await guard(ctx);
+    if (denied) return denied;
+    const suggestion = await ctx.repo.getSuggestion(ctx.params.id);
+    if (!suggestion || suggestion.status !== 'PENDING') return back('That suggestion is no longer pending', true);
+    await ctx.repo.decideSuggestion(suggestion.id, 'REJECTED');
+    return back('Suggestion rejected');
   });
 
   router.post('/admin/seed', async (ctx) => {

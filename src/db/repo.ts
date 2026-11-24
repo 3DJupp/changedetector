@@ -420,6 +420,48 @@ export class Repo {
       }));
   }
 
+  // --- suggestions --------------------------------------------------------
+
+  /** Records a suggestion, or adds a vote if the URL was suggested before. */
+  async suggestSite(input: { url: string; canonicalUrl: string; category: string | null; reason: string | null }): Promise<{ id: string; status: string; votes: number; created: boolean }> {
+    const existing = await this.db
+      .prepare('SELECT id, status, votes FROM site_suggestions WHERE canonical_url = ?')
+      .bind(input.canonicalUrl)
+      .first<{ id: string; status: string; votes: number }>();
+    if (existing) {
+      if (existing.status === 'PENDING') {
+        await this.db.prepare('UPDATE site_suggestions SET votes = votes + 1 WHERE id = ?').bind(existing.id).run();
+        return { ...existing, votes: existing.votes + 1, created: false };
+      }
+      return { ...existing, created: false };
+    }
+    const id = newId('sug');
+    await this.db
+      .prepare('INSERT INTO site_suggestions (id, url, canonical_url, category, reason, created_at) VALUES (?,?,?,?,?,?)')
+      .bind(id, input.url, input.canonicalUrl, input.category, input.reason, now())
+      .run();
+    return { id, status: 'PENDING', votes: 1, created: true };
+  }
+
+  async pendingSuggestions(limit = 50) {
+    const rows = await this.db
+      .prepare(`SELECT * FROM site_suggestions WHERE status = 'PENDING' ORDER BY votes DESC, created_at ASC LIMIT ?`)
+      .bind(limit)
+      .all<SiteSuggestion>();
+    return rows.results ?? [];
+  }
+
+  async getSuggestion(id: string): Promise<SiteSuggestion | null> {
+    return this.db.prepare('SELECT * FROM site_suggestions WHERE id = ?').bind(id).first<SiteSuggestion>();
+  }
+
+  async decideSuggestion(id: string, status: 'APPROVED' | 'REJECTED', siteId: string | null = null): Promise<void> {
+    await this.db
+      .prepare('UPDATE site_suggestions SET status = ?, site_id = ?, decided_at = ? WHERE id = ?')
+      .bind(status, siteId, now(), id)
+      .run();
+  }
+
   // --- sitemap ------------------------------------------------------------
 
   async countPublishedChanges(): Promise<number> {
@@ -650,12 +692,12 @@ export class Repo {
   async subscriptionsFor(userId: string) {
     const rows = await this.db
       .prepare(
-        `SELECT sub.id, sub.site_id, sub.category, sub.min_score, sub.pending, s.title AS site_title, s.canonical_url
+        `SELECT sub.id, sub.site_id, sub.category, sub.min_score, sub.pending, sub.channel, sub.target, s.title AS site_title, s.canonical_url
          FROM subscriptions sub LEFT JOIN monitored_sites s ON s.id = sub.site_id
          WHERE sub.user_id = ? ORDER BY sub.created_at`,
       )
       .bind(userId)
-      .all<{ id: string; site_id: string | null; category: string | null; min_score: number; pending: number; site_title: string | null; canonical_url: string | null }>();
+      .all<{ id: string; site_id: string | null; category: string | null; min_score: number; pending: number; channel: string; target: string | null; site_title: string | null; canonical_url: string | null }>();
     return rows.results ?? [];
   }
 
@@ -711,20 +753,23 @@ export class Repo {
     return rows.results ?? [];
   }
 
-  async queueNotification(userId: string | null, changeId: string, channel: string): Promise<void> {
+  async queueNotification(userId: string | null, changeId: string, channel: string, payload: string | null = null): Promise<void> {
     await this.db
-      .prepare('INSERT INTO notifications (id, user_id, change_id, channel, status, created_at) VALUES (?,?,?,?,?,?)')
-      .bind(newId('ntf'), userId, changeId, channel, 'PENDING', now())
+      .prepare('INSERT INTO notifications (id, user_id, change_id, channel, status, created_at, payload) VALUES (?,?,?,?,?,?,?)')
+      .bind(newId('ntf'), userId, changeId, channel, 'PENDING', now(), payload)
       .run();
   }
 
   async pendingNotifications(limit = 50) {
     const rows = await this.db
       .prepare(
-        `SELECT n.*, u.email, u.token, u.verified, c.headline, c.slug, c.summary
+        `SELECT n.*, u.email, u.token, u.verified, c.headline, c.slug, c.summary, c.severity,
+                c.interestingness_score, c.before_value, c.after_value, c.delta, c.detected_at,
+                s.title AS site_title, s.canonical_url AS site_url, s.category AS site_category
          FROM notifications n
          LEFT JOIN users u ON u.id = n.user_id
          LEFT JOIN change_events c ON c.id = n.change_id
+         LEFT JOIN monitored_sites s ON s.id = c.site_id
          WHERE n.status = 'PENDING' AND n.attempts < 5 ORDER BY n.created_at LIMIT ?`,
       )
       .bind(limit)
@@ -759,6 +804,19 @@ export class Repo {
       stats: string;
     }>();
   }
+}
+
+export interface SiteSuggestion {
+  id: string;
+  url: string;
+  canonical_url: string;
+  category: string | null;
+  reason: string | null;
+  status: string;
+  votes: number;
+  site_id: string | null;
+  created_at: number;
+  decided_at: number | null;
 }
 
 export interface SubscriberUser {

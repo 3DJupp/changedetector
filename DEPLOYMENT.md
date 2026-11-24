@@ -216,3 +216,16 @@ Then uncomment the `[[vectorize]]` block in `wrangler.toml` and deploy. Only
 changes detected after that are indexed. `/api/search` reports how many results
 came from the semantic layer in `semanticMatches`.
 
+## IndexNow (optional)
+
+Pick a random key of 8 to 128 letters, digits or dashes and set it as a var:
+
+```toml
+[vars]
+INDEXNOW_KEY = "3f9c2a7d1b8e4f60"
+```
+
+The Worker serves it at `https://<your-host>/<key>.txt` and pings IndexNow for
+every newly published change. Pings are skipped while `PUBLIC_BASE_URL` points
+at localhost.
+

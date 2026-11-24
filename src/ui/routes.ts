@@ -1,5 +1,8 @@
 /** Server-rendered page routes. */
-import { Ctx, json, problem, redirect, Router } from '../router';
+import { Ctx, json, problem, readBody, redirect, Router } from '../router';
+import { followPage, suggestPage, suggestResultPage } from './pages/forms';
+import { overLimit } from '../lib/ratelimit';
+import { assertFetchable, canonicalizeUrl, UrlNotAllowed } from '../lib/urlguard';
 import { html, layout } from './layout';
 import { feedPage } from './pages/feed';
 import { changePage } from './pages/change';
@@ -11,6 +14,7 @@ import { aboutPage, apiPage, sitesPage } from './pages/misc';
 import { snapshotPage } from './pages/snapshot';
 import { CARD_VERSION, renderCardPng, renderCardSvg } from './og';
 import { rssFeed, xml } from './rss';
+import { badgeSvg, EMBED_HEADERS, embedCard } from './embed';
 import { FAVICON_SVG, icoFromPng, iconPng, webManifest } from './icons';
 import { CATEGORIES } from '../types';
 import type { ChangeEvent, MonitoredSite } from '../types';
@@ -69,7 +73,7 @@ export function notFound(ctx: Pick<Ctx, 'url' | 'baseUrl'>, message = 'Not found
       baseUrl: ctx.baseUrl,
       narrow: true,
       noindex: true,
-      body: `<div class="wrap-narrow" style="padding:80px 0"><div class="label">404</div>
+      body: `<div class="wrap-narrow" style="padding-top:80px;padding-bottom:80px"><div class="label">404</div>
         <h1 style="font-size:34px;letter-spacing:-.04em;margin:14px 0 0">${escapeHtml(message)}</h1>
         <p class="muted" style="margin-top:12px">The page you asked for is not here. <a href="/">Back to the feed</a>.</p></div>`,
     }),
@@ -262,6 +266,15 @@ export function registerUiRoutes(router: Router): void {
     });
   });
 
+  router.get('/changes/:slug/embed', async (ctx) => {
+    const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
+    if (!change || !change.published || change.false_positive) return new Response('not found', { status: 404, headers: EMBED_HEADERS });
+    const site = await ctx.repo.getSite(change.site_id);
+    if (!site) return new Response('not found', { status: 404, headers: EMBED_HEADERS });
+    const dark = ctx.url.searchParams.get('theme') === 'dark';
+    return new Response(embedCard({ baseUrl: ctx.baseUrl, change, site, dark }), { headers: EMBED_HEADERS });
+  });
+
   router.get('/changes/:slug/card.svg', async (ctx) => {
     const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
     if (!change) return new Response('not found', { status: 404 });
@@ -323,6 +336,14 @@ export function registerUiRoutes(router: Router): void {
       );
     }
     return new Response('not found', { status: 404 });
+  });
+
+  router.get('/sites/:id/badge.svg', async (ctx) => {
+    const site = await ctx.repo.getSite(ctx.params.id);
+    if (!site) return new Response('not found', { status: 404 });
+    return new Response(badgeSvg(site), {
+      headers: { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'public, max-age=900, s-maxage=1800' },
+    });
   });
 
   router.get('/sites/:id/og.png', async (ctx) => {
@@ -534,6 +555,46 @@ export function registerUiRoutes(router: Router): void {
   router.get('/about', async (ctx) => html(aboutPage(ctx.baseUrl), 200, { 'cache-control': 'public, max-age=3600' }));
   router.get('/api', async (ctx) => html(apiPage(ctx.baseUrl), 200, { 'cache-control': 'public, max-age=3600' }));
 
+  // --- follow and suggest --------------------------------------------------
+  router.get('/follow', async (ctx) => {
+    const siteKey = ctx.url.searchParams.get('site');
+    const site = siteKey ? await ctx.repo.getSite(siteKey) : null;
+    if (siteKey && !site) return notFound(ctx, 'That monitored page does not exist');
+    const category = ctx.url.searchParams.get('category');
+    return html(
+      followPage({ baseUrl: ctx.baseUrl, site, category: category && CATEGORIES.includes(category as never) ? category : null }),
+    );
+  });
+
+  router.get('/suggest', (ctx) =>
+    html(suggestPage({ baseUrl: ctx.baseUrl, url: (ctx.url.searchParams.get('url') ?? '').slice(0, 500) })),
+  );
+
+  router.post('/suggest', async (ctx) => {
+    const body = await readBody(ctx.request);
+    const again = (error: string, status = 400) => html(suggestPage({ baseUrl: ctx.baseUrl, url: String(body.url ?? '').slice(0, 500), error }), status);
+    // Bots fill every field; people never see this one.
+    if (body.website) return html(suggestResultPage({ baseUrl: ctx.baseUrl, outcome: 'received' }), 202);
+    if (await overLimit(ctx.env.CACHE, ctx.request, 'suggest', 10)) {
+      return again('Thanks, that is a lot of suggestions. Please try again in an hour.', 429);
+    }
+    let canonical: string;
+    let url: URL;
+    try {
+      url = await assertFetchable(String(body.url ?? '').trim(), { cache: ctx.env.CACHE });
+      canonical = canonicalizeUrl(url.toString());
+    } catch (error) {
+      return again(error instanceof UrlNotAllowed ? `That URL cannot be monitored: ${error.message}.` : 'Enter a complete public URL, starting with https://');
+    }
+    const existing = await ctx.repo.getSiteByCanonical(canonical);
+    if (existing) return html(suggestResultPage({ baseUrl: ctx.baseUrl, outcome: 'monitored', sitePath: sitePath(existing) }));
+    const category = body.category && CATEGORIES.includes(body.category as never) ? String(body.category) : null;
+    const reason = String(body.reason ?? '').replace(/\s+/g, ' ').trim().slice(0, 500) || null;
+    const result = await ctx.repo.suggestSite({ url: url.toString(), canonicalUrl: canonical, category, reason });
+    const outcome = result.status === 'REJECTED' ? 'declined' : result.created ? 'received' : 'voted';
+    return html(suggestResultPage({ baseUrl: ctx.baseUrl, outcome }), result.created ? 202 : 200);
+  });
+
   // --- icons and manifest -------------------------------------------------
   const ICON_CACHE = { 'cache-control': 'public, max-age=604800, s-maxage=2592000' };
   router.get('/favicon.svg', () => new Response(FAVICON_SVG, { headers: { 'content-type': 'image/svg+xml', ...ICON_CACHE } }));
@@ -553,7 +614,7 @@ export function registerUiRoutes(router: Router): void {
 
   router.get('/robots.txt', async (ctx) =>
     new Response(
-      `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /snapshots/*/raw\nDisallow: /search\nDisallow: /confirm\nDisallow: /unsubscribe\n\nSitemap: ${ctx.baseUrl}/sitemap.xml\n`,
+      `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /snapshots/*/raw\nDisallow: /search\nDisallow: /confirm\nDisallow: /unsubscribe\nDisallow: /follow\nDisallow: /changes/*/embed\n\nSitemap: ${ctx.baseUrl}/sitemap.xml\n`,
       { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=86400' } },
     ),
   );

@@ -123,7 +123,7 @@ export function apiPage(baseUrl: string): string {
     ['GET', '/api/search?q=', 'Full-text search across headlines, summaries, sites, URLs and categories.'],
     ['GET', '/api/stats', 'Aggregate counters: sites, snapshots, changes, crawl success, pinning coverage.'],
     ['GET', '/api/digest/:day', 'The daily digest for a given YYYY-MM-DD.'],
-    ['POST', '/api/subscriptions', 'Follow a site, a category or the daily digest. Body: {email, siteId?, category?, digest?, minScore?}. Returns 202; nothing is sent until the emailed link is confirmed.'],
+    ['POST', '/api/subscriptions', 'Follow a site, a category or the daily digest. Body: {email, siteId?, category?, digest?, webhook?, minScore?}. With webhook (https), changes go to Slack, Discord or your endpoint. Returns 202; nothing is sent until the emailed link is confirmed.'],
     ['POST', '/api/sites', 'Add a monitored URL. Requires the admin token.'],
     ['POST', '/api/sites/:id/crawl', 'Force a crawl of one site. Requires the admin token.'],
     ['PATCH', '/api/sites/:id', 'Update category, cadence, status, render mode or normalization rules. Admin token.'],

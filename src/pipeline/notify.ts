@@ -7,6 +7,7 @@ import type { Env } from '../types';
 import { Repo } from '../db/repo';
 import { escapeHtml } from '../lib/html';
 import type { ChangeEvent } from '../types';
+import { deliverWebhook, type ChangeEventPayload } from './webhooks';
 
 export async function queueForSubscribers(
   env: Env,
@@ -16,7 +17,7 @@ export async function queueForSubscribers(
 ): Promise<number> {
   const subscribers = await repo.subscribersFor(site.id, site.category, change.interestingness_score);
   for (const subscriber of subscribers) {
-    await repo.queueNotification(subscriber.user_id, change.id, subscriber.channel);
+    await repo.queueNotification(subscriber.user_id, change.id, subscriber.channel, subscriber.channel === 'WEBHOOK' ? subscriber.target : null);
   }
   return subscribers.length;
 }
@@ -33,6 +34,15 @@ interface PendingRow {
   headline: string | null;
   summary: string | null;
   slug: string | null;
+  severity: string | null;
+  interestingness_score: number | null;
+  before_value: string | null;
+  after_value: string | null;
+  delta: string | null;
+  detected_at: number | null;
+  site_title: string | null;
+  site_url: string | null;
+  site_category: string | null;
 }
 
 export async function deliverPending(env: Env, repo: Repo, limit = 25): Promise<{ sent: number; failed: number }> {
@@ -44,7 +54,7 @@ export async function deliverPending(env: Env, repo: Repo, limit = 25): Promise<
 
   for (const row of pending) {
     try {
-      if ((row.channel === 'EMAIL' || row.channel === 'DIGEST') && (!row.email || row.verified !== 1)) {
+      if ((row.channel === 'EMAIL' || row.channel === 'DIGEST' || row.channel === 'WEBHOOK') && (!row.email || row.verified !== 1)) {
         await repo.markNotification(row.id, 'SKIPPED', row.email ? 'address not confirmed' : 'no email');
         continue;
       }
@@ -64,8 +74,11 @@ export async function deliverPending(env: Env, repo: Repo, limit = 25): Promise<
         }
         await sendEmail(env, row.email!, `The Internet Changed Today · ${day}`, digestHtml(env, digest, row.token), unsubscribeUrl(env, row.token));
       } else if (row.channel === 'WEBHOOK') {
-        await repo.markNotification(row.id, 'SKIPPED', 'webhook target missing');
-        continue;
+        if (!row.payload || !row.slug || !row.headline) {
+          await repo.markNotification(row.id, 'SKIPPED', row.payload ? 'change no longer exists' : 'webhook target missing');
+          continue;
+        }
+        await deliverWebhook(env, row.payload, changeEvent(env, row));
       } else {
         await repo.markNotification(row.id, 'SKIPPED', `unsupported channel ${row.channel}`);
         continue;
@@ -78,6 +91,22 @@ export async function deliverPending(env: Env, repo: Repo, limit = 25): Promise<
     }
   }
   return { sent, failed };
+}
+
+function changeEvent(env: Env, row: PendingRow): ChangeEventPayload {
+  return {
+    id: row.change_id,
+    url: `${env.PUBLIC_BASE_URL}${changePath({ slug: row.slug ?? '', headline: row.headline ?? '' })}`,
+    headline: row.headline ?? '',
+    summary: row.summary ?? '',
+    severity: row.severity ?? 'MINOR',
+    score: row.interestingness_score ?? 0,
+    before: row.before_value,
+    after: row.after_value,
+    delta: row.delta,
+    detectedAt: new Date((row.detected_at ?? 0) * 1000).toISOString(),
+    site: { title: row.site_title, url: row.site_url, category: row.site_category },
+  };
 }
 
 function unsubscribeUrl(env: Env, token: string | null): string | undefined {

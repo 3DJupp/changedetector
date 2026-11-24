@@ -3,6 +3,7 @@ import { sitePath } from '../../lib/paths';
 import type { MonitoredSite } from '../../types';
 import { CATEGORIES, INTERVAL_PRESETS } from '../../types';
 import { layout } from '../layout';
+import type { SiteSuggestion } from '../../db/repo';
 import { e, hostOf, stampShort, timeAgo } from '../components';
 import { COLORS } from '../theme';
 
@@ -23,6 +24,7 @@ export interface AdminProps {
   message?: string;
   error?: string;
   authed: boolean;
+  suggestions?: SiteSuggestion[];
 }
 
 function statusPill(status: string): string {
@@ -74,6 +76,28 @@ export function adminPage(props: AdminProps): string {
       <form method="post" action="/admin/digest"><button class="btn btn-ghost btn-sm" type="submit">Rebuild today's digest</button></form>
       <form method="post" action="/admin/notifications"><button class="btn btn-ghost btn-sm" type="submit">Flush notification outbox</button></form>
     </div>
+  </div>`
+    : '';
+
+  const suggestions = props.authed && props.suggestions?.length
+    ? `<div class="panel panel-pad" style="margin:16px 0 0">
+    <div class="label" style="margin-bottom:13px">SUGGESTED BY VISITORS · ${props.suggestions.length} PENDING</div>
+    ${props.suggestions
+      .map(
+        (suggestion) => `<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:12px 0;border-top:1px solid rgba(255,255,255,.07)">
+      <div style="flex:1 1 280px;min-width:0">
+        <a class="mono" style="font-size:11.5px;word-break:break-all" href="${e(suggestion.url)}" rel="nofollow noopener noreferrer" target="_blank">${e(suggestion.canonical_url)}</a>
+        <div style="font-size:12px;color:#8892A0;margin-top:4px">${suggestion.votes} vote${suggestion.votes === 1 ? '' : 's'}${suggestion.category ? ` · ${e(suggestion.category)}` : ''}${suggestion.reason ? ` · “${e(suggestion.reason)}”` : ''}</div>
+      </div>
+      <form method="post" action="/admin/suggestions/${e(suggestion.id)}/approve" class="formrow" style="flex:0 0 auto">
+        <select class="field" name="category" style="width:auto">${CATEGORIES.map((category) => `<option value="${e(category)}"${category === suggestion.category ? ' selected' : ''}>${e(category)}</option>`).join('')}</select>
+        <select class="field" name="interval" style="width:auto">${Object.keys(INTERVAL_PRESETS).map((key) => `<option value="${key}"${key === '6h' ? ' selected' : ''}>${key}</option>`).join('')}</select>
+        <button class="btn btn-primary btn-sm" type="submit">Approve</button>
+      </form>
+      <form method="post" action="/admin/suggestions/${e(suggestion.id)}/reject"><button class="btn btn-ghost btn-sm" type="submit">Reject</button></form>
+    </div>`,
+      )
+      .join('')}
   </div>`
     : '';
 
@@ -133,6 +157,7 @@ export function adminPage(props: AdminProps): string {
     <div class="panel panel-pad"><div class="label">CRAWLS · 24H</div><div class="mono" style="font-size:25px;letter-spacing:-.07em;margin-top:9px">${props.stats.crawls24h}</div><div style="font-size:11.5px;color:#8892A0;margin-top:5px">${props.stats.changes} changes all-time</div></div>
   </div>
 
+  ${suggestions}
   ${addForm}
 
   <div class="rowlist" style="margin:16px 0 0">

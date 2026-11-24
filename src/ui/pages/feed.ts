@@ -75,6 +75,7 @@ export function feedPage(props: FeedProps): string {
       <p class="sub">Track important websites and see exactly what changed, when it changed, and what the previous version looked like. Every snapshot is hashed, content-addressed and verifiable.</p>
       <div style="display:flex;gap:10px;margin-top:28px;flex-wrap:wrap">
         <a class="btn btn-primary" href="#digest">Get the daily digest</a>
+        <a class="btn btn-ghost" href="/suggest">Suggest a page</a>
         <a class="btn btn-ghost" href="${props.changes[0] ? `${e(changePath(props.changes[0]))}/diff` : '/sites'}">See a diff</a>
       </div>
     </div>
@@ -89,7 +90,7 @@ export function feedPage(props: FeedProps): string {
     <nav class="label" aria-label="Breadcrumb"><a href="/">ALL CHANGES</a> / ${e(props.category.toUpperCase())}</nav>
     <h1 style="margin:12px 0 0;font-size:34px;letter-spacing:-.04em;font-weight:800">${e(props.category)} changes</h1>
     <p class="muted" style="font-size:15px;line-height:1.55;margin:10px 0 0;max-width:62ch">${e(CATEGORY_COPY[props.category] ?? '')} ${props.total.toLocaleString()} meaningful change${props.total === 1 ? '' : 's'} on record.</p>
-    <p style="margin:14px 0 0;display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" href="/rss.xml?category=${encodeURIComponent(props.category)}">RSS for ${e(props.category)}</a><a class="btn btn-ghost btn-sm" href="/sites?category=${encodeURIComponent(props.category)}">Monitored pages</a></p>
+    <p style="margin:14px 0 0;display:flex;gap:8px;flex-wrap:wrap"><a class="btn btn-ghost btn-sm" href="/rss.xml?category=${encodeURIComponent(props.category)}">RSS for ${e(props.category)}</a><a class="btn btn-ghost btn-sm" href="/sites?category=${encodeURIComponent(props.category)}">Monitored pages</a><a class="btn btn-ghost btn-sm" href="/follow?category=${encodeURIComponent(props.category)}">Slack, Discord, webhook</a></p>
   </section>`;
 
   const body = `<div class="wrap">

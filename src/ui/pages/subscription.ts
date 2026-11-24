@@ -3,11 +3,21 @@ import { layout } from '../layout';
 import { e } from '../components';
 
 interface SubscriptionRow {
+  channel?: string;
+  target?: string | null;
   site_id: string | null;
   category: string | null;
   pending: number;
   site_title: string | null;
   canonical_url: string | null;
+}
+
+function hostOnly(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return 'an unknown host';
+  }
 }
 
 function shell(baseUrl: string, path: string, title: string, body: string): string {
@@ -18,7 +28,7 @@ function shell(baseUrl: string, path: string, title: string, body: string): stri
     baseUrl,
     narrow: true,
     noindex: true,
-    body: `<div class="wrap-narrow" style="padding:64px 0 80px">${body}</div>`,
+    body: `<div class="wrap-narrow" style="padding-top:64px;padding-bottom:80px">${body}</div>`,
   });
 }
 
@@ -94,9 +104,11 @@ export function unsubscribePage(props: {
   const rows = props.subscriptions ?? [];
   const items = [
     ...(props.digest ? ['Daily digest'] : []),
-    ...rows.map((row) =>
-      `${row.site_id ? `Page: ${row.site_title ?? row.canonical_url ?? row.site_id}` : `Category: ${row.category ?? 'all'}`}${row.pending ? ' (not confirmed yet)' : ''}`,
-    ),
+    ...rows.map((row) => {
+      const scope = row.site_id ? `Page: ${row.site_title ?? row.canonical_url ?? row.site_id}` : `Category: ${row.category ?? 'all'}`;
+      const via = row.channel === 'WEBHOOK' && row.target ? ` → webhook at ${hostOnly(row.target)}` : '';
+      return `${scope}${via}${row.pending ? ' (not confirmed yet)' : ''}`;
+    }),
   ];
   return shell(
     props.baseUrl,

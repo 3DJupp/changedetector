@@ -10,6 +10,9 @@ import { sha256Hex } from '../lib/hash';
 import { buildDigest } from '../pipeline/digest';
 import { hybridSearch } from '../lib/semantic';
 import { changePath } from '../lib/paths';
+import { overLimit } from '../lib/ratelimit';
+import { validateWebhookTarget } from '../pipeline/webhooks';
+import { UrlNotAllowed } from '../lib/urlguard';
 import { confirmationHtml, sendEmail } from '../pipeline/notify';
 import { html } from '../ui/layout';
 import { confirmPage, subscribeResultPage, unsubscribePage } from '../ui/pages/subscription';
@@ -384,6 +387,9 @@ export function registerApiRoutes(router: Router): void {
         ? html(subscribeResultPage({ baseUrl: ctx.baseUrl, ok: false, message, back }), status)
         : problem(status, message);
 
+    if (await overLimit(ctx.env.CACHE, ctx.request, 'subscribe', 20)) {
+      return fail(429, 'Too many requests from your network. Please try again in an hour.');
+    }
     const email = String(body.email ?? '').trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s.]+\.[^@\s]+$/.test(email) || email.length > 190) {
       return fail(400, 'Enter a valid email address.');
@@ -396,10 +402,25 @@ export function registerApiRoutes(router: Router): void {
     }
     if (siteId && !(await ctx.repo.getSite(siteId))) return fail(404, 'That page is not monitored.');
 
+    // Slack, Discord or any HTTPS endpoint instead of email. The email address
+    // still owns the subscription and has to confirm it.
+    let channel: 'EMAIL' | 'WEBHOOK' = 'EMAIL';
+    let target: string | null = null;
+    const webhook = String(body.webhook ?? '').trim();
+    if (webhook) {
+      if (!siteId && !category) return fail(400, 'A webhook needs a page or a category to follow.');
+      try {
+        target = (await validateWebhookTarget(ctx.env, webhook)).url;
+        channel = 'WEBHOOK';
+      } catch (error) {
+        return fail(400, error instanceof UrlNotAllowed ? error.message : 'That webhook URL cannot be used.');
+      }
+    }
+
     const user = await ctx.repo.upsertUser(email);
     const minScore = Math.min(100, Math.max(0, Number.parseInt(String(body.minScore ?? '40'), 10) || 40));
     if (siteId || category) {
-      await ctx.repo.createSubscription({ userId: user.id, siteId, category: siteId ? null : category, minScore, channel: 'EMAIL' });
+      await ctx.repo.createSubscription({ userId: user.id, siteId, category: siteId ? null : category, minScore, channel, target });
     }
     if (digest) await ctx.repo.requestDigest(user.id);
 

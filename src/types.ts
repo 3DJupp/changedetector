@@ -32,6 +32,8 @@ export interface Env {
   IPFS_API_TOKEN?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
+  /** Enables IndexNow pings for newly published changes. */
+  INDEXNOW_KEY?: string;
   ANTHROPIC_API_KEY?: string;
 }
 

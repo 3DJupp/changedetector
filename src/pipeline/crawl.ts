@@ -5,6 +5,8 @@
  */
 import type { Env, MonitoredSite, Snapshot } from '../types';
 import { indexChangeVector } from '../lib/semantic';
+import { pingIndexNow } from '../lib/indexnow';
+import { changePath, sitePath } from '../lib/paths';
 import { Repo, now } from '../db/repo';
 import { computeBackoffSeconds, fetchPage, FetchFailure, parseRetryAfter, throttleDomain } from '../lib/fetcher';
 import { UrlNotAllowed } from '../lib/urlguard';
@@ -456,6 +458,9 @@ export async function processCapture(
   if (published) {
     await repo.bumpMetric('published_changes');
     await queueForSubscribers(env, repo, change, site).catch(() => 0);
+    const base = env.PUBLIC_BASE_URL.replace(/\/$/, '');
+    const slug = site.slug ?? (await repo.ensureSiteSlug(site).catch(() => null));
+    await pingIndexNow(env, [`${base}${changePath(change)}`, `${base}${sitePath({ id: site.id, slug })}`]);
   }
 
   await repo.logCrawl({

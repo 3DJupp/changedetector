@@ -249,6 +249,7 @@ Vars live in `wrangler.toml`; secrets are set with `wrangler secret put`.
 | `ADMIN_TOKEN` | *secret* | admin API and console |
 | `IPFS_API_TOKEN` | *secret* | bearer token for the IPFS endpoint |
 | `RESEND_API_KEY` / `EMAIL_FROM` | *secret* | digest and alert email |
+| `INDEXNOW_KEY` | — | enables IndexNow pings for new changes; the key file is served at `/<key>.txt` |
 | `ANTHROPIC_API_KEY` | *secret* | optional hosted-model fallback |
 | `CF_ACCOUNT_ID` / `CF_API_TOKEN` | *secret* | enables Browser Rendering for JS-only pages |
 
@@ -275,7 +276,7 @@ GET    /api/snapshots/:id/artifact.car
 GET    /api/search?q=pricing
 GET    /api/stats
 GET    /api/digest/:day
-POST   /api/subscriptions        {email, siteId? | category? | digest?, minScore?}  → 202, confirm by email
+POST   /api/subscriptions        {email, siteId? | category? | digest?, webhook?, minScore?}  → 202, confirm by email
 POST   /api/sites                {url, category, interval, priority}      🔒
 POST   /api/sites/:id/crawl                                               🔒
 PATCH  /api/sites/:id                                                     🔒
@@ -290,6 +291,39 @@ and RFC 8058 one-click `List-Unsubscribe` headers; `/unsubscribe?token=…`
 switches everything off.
 
 Feeds: `/rss.xml`, `/rss.xml?category=Pricing`, `/sites/:id/rss.xml`, `/digest.xml`.
+
+### Webhooks, Slack and Discord
+
+Pass `webhook` (an https URL) with a page or category, or use the form at
+`/follow?site=…` / `/follow?category=…`. Slack and Discord incoming webhook URLs
+get a formatted message (Discord with mentions disabled), any other endpoint
+gets a JSON event:
+
+```json
+{ "type": "change.detected", "version": 1,
+  "change": { "id": "…", "url": "…", "headline": "…", "summary": "…", "severity": "MAJOR",
+              "score": 88, "before": "$19", "after": "$24", "delta": "+26.3%",
+              "detectedAt": "…", "site": { "title": "…", "url": "…", "category": "Pricing" } } }
+```
+
+The email address owns the webhook and confirms it like any other
+subscription. Targets go through the same SSRF guard as crawled pages, at
+subscribe time and before every delivery, and redirects are not followed.
+Deliveries are not signed; treat the payload as a hint and fetch
+`/api/changes/:id` if you need to trust it.
+
+### Suggestions, embeds and badges
+
+- `/suggest` lets anyone propose a page. Suggestions are de-duplicated by
+  canonical URL (a repeat counts as a vote), rate-limited per client, checked
+  against private networks, and wait in the admin console until approved.
+- `/changes/:slug/embed` is an iframe card (`?theme=dark` available); the
+  change page shows the snippet. It is the only page that may be framed; every
+  other page sends `X-Frame-Options: DENY`.
+- `/sites/:id/badge.svg` is a "last change" badge; the site page shows the
+  Markdown snippet.
+- With `INDEXNOW_KEY` set, every published change and its site page are pushed
+  to IndexNow (Bing, Yandex and others) right away.
 
 ## Public URLs and SEO
 

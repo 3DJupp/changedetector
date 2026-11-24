@@ -10,6 +10,7 @@ import type { Env, Job } from './types';
 import { Router, Ctx, problem } from './router';
 import { Repo } from './db/repo';
 import { notFound, registerUiRoutes } from './ui/routes';
+import { indexNowKey } from './lib/indexnow';
 import { registerApiRoutes } from './api/routes';
 import { registerAdminRoutes } from './api/admin-routes';
 import { sweep } from './pipeline/scheduler';
@@ -42,6 +43,12 @@ export default {
           'access-control-max-age': '86400',
         },
       });
+    }
+
+    // IndexNow ownership proof: /<INDEXNOW_KEY>.txt containing the key.
+    const indexNow = indexNowKey(env);
+    if (indexNow && url.pathname === `/${indexNow}.txt`) {
+      return new Response(indexNow, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=86400' } });
     }
 
     const matched = router.match(request.method, url.pathname);

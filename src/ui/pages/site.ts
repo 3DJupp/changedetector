@@ -1,4 +1,5 @@
 /** Site page: identity, cadence, sparkline, change history, snapshot ledger. */
+import { badgeMarkdown } from '../embed';
 import { breadcrumbJsonLd, metaDescription, SITE_NAME } from '../seo';
 import { categoryPath, changePath, sitePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite, Snapshot } from '../../types';
@@ -57,8 +58,13 @@ export function sitePage(props: SiteProps): string {
       </form>
       <a class="btn btn-ghost" href="/sites/${e(site.id)}/rss.xml">RSS</a>
       <a class="btn btn-ghost" href="/api/sites/${e(site.id)}/changes?format=csv">CSV</a>
+      <a class="btn btn-ghost" href="/follow?site=${e(site.slug ?? site.id)}">Slack, Discord, webhook</a>
     </div>
   </section>
+  <details style="margin:4px 0 0">
+    <summary class="label" style="cursor:pointer">BADGE <img src="/sites/${e(site.slug ?? site.id)}/badge.svg" alt="" style="vertical-align:middle;margin-left:8px;height:16px"></summary>
+    <textarea class="field mono" readonly rows="2" style="width:100%;font-size:11px;margin-top:10px;resize:vertical" onclick="this.select()">${e(badgeMarkdown(props.baseUrl, site))}</textarea>
+  </details>
 
   <section style="padding:28px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:28px;align-items:end">
     <div>

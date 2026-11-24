@@ -1,4 +1,5 @@
 /** The public change event page — the most important surface in the product. */
+import { embedSnippet } from '../embed';
 import { breadcrumbJsonLd, metaDescription, organizationJsonLd, SITE_NAME } from '../seo';
 import { categoryPath, changePath, sitePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite, Snapshot } from '../../types';
@@ -164,6 +165,11 @@ export function changePage(props: ChangeProps): string {
       <a class="btn btn-ghost btn-sm" href="/changes/${e(change.slug)}/og.png">Download card</a>
       <a class="btn btn-ghost btn-sm" href="/api/changes/${e(change.id)}">JSON</a>
     </div>
+    <details style="margin-top:16px">
+      <summary class="label" style="cursor:pointer">EMBED THIS CHANGE</summary>
+      <p class="muted" style="font-size:13px;margin:10px 0 8px">Paste into any page. Add <code class="mono">?theme=dark</code> to the src for dark backgrounds.</p>
+      <textarea class="field mono" readonly rows="3" style="width:100%;font-size:11px;resize:vertical" onclick="this.select()">${e(embedSnippet(props.baseUrl, change))}</textarea>
+    </details>
   </section>
 </div>`;
 
