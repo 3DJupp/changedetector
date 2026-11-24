@@ -130,6 +130,7 @@ export function sitePage(props: SiteProps): string {
     title: `${site.title ?? hostOf(site.canonical_url)} — monitored page`,
     description: `Change history and snapshot ledger for ${site.canonical_url}. ${site.change_count} changes recorded across ${site.snapshot_count} captures.`,
     path: `/sites/${site.id}`,
+    ogImage: `${props.baseUrl}/sites/${site.id}/og.png`,
     baseUrl: props.baseUrl,
     active: 'sites',
     body,

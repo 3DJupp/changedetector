@@ -4,7 +4,7 @@ import { parseNormalized } from '../src/pipeline/crawl';
 import { detectChange } from '../src/lib/detect';
 import { sha256Hex } from '../src/lib/hash';
 import { encodeDirectory, writeCar } from '../src/lib/cid';
-import { renderCardPng, renderCardSvg } from '../src/ui/og';
+import { cardText, renderCardPng, renderCardSvg } from '../src/ui/og';
 import { encodeIndexedPng, Canvas } from '../src/lib/png';
 
 const URL = 'https://example.com/pricing';
@@ -110,8 +110,8 @@ describe('share card rendering', () => {
     url: 'change.detector/changes/8f21ac3d',
   };
 
-  it('emits a valid 1200x630 PNG', () => {
-    const png = renderCardPng(model);
+  it('emits a valid 1200x630 PNG', async () => {
+    const png = await renderCardPng(model);
     expect(Array.from(png.slice(0, 8))).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const view = new DataView(png.buffer, png.byteOffset);
     expect(new TextDecoder().decode(png.slice(12, 16))).toBe('IHDR');
@@ -122,9 +122,24 @@ describe('share card rendering', () => {
     expect(new TextDecoder().decode(png.slice(-8, -4))).toBe('IEND');
   });
 
-  it('renders different bytes for different content', () => {
-    const a = renderCardPng(model);
-    const b = renderCardPng({ ...model, headline: 'Something else entirely happened' });
+  it('compresses the card to a size unfurlers accept', async () => {
+    const png = await renderCardPng(model);
+    expect(png.length).toBeLessThan(60_000);
+  });
+
+  it('draws umlauts as their base letters instead of "?"', () => {
+    expect(cardText('Preisänderung für Größe')).toBe('Preisanderung fur Grosse');
+    expect(cardText('“Pro” plan – now €24')).toBe('"Pro" plan – now €24');
+  });
+
+  it('renders cards without a severity or detection time', async () => {
+    const png = await renderCardPng({ headline: 'Fieldstone Cloud', before: null, after: null, delta: '12 CHANGES', severity: null, footer: 'Monitored since 2026', url: 'x.example/sites/a' });
+    expect(new TextDecoder().decode(png.slice(12, 16))).toBe('IHDR');
+  });
+
+  it('renders different bytes for different content', async () => {
+    const a = await renderCardPng(model);
+    const b = await renderCardPng({ ...model, headline: 'Something else entirely happened' });
     expect(a.length === b.length && a.every((byte, index) => byte === b[index])).toBe(false);
   });
 

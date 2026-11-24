@@ -1,9 +1,13 @@
 /**
  * A minimal, dependency-free PNG encoder (indexed colour, 4 bits per pixel).
  *
- * The share card uses a 16-colour palette, so 4bpp keeps the image small
- * without any compression cleverness: the deflate stream uses stored blocks,
- * which is valid zlib and trivially correct.
+ * Two variants share one container writer:
+ *   encodeIndexedPng       synchronous, stored (uncompressed) deflate blocks.
+ *                          Valid and trivially correct, but ~380 KB for a card.
+ *   encodeIndexedPngAsync  real deflate via the platform CompressionStream
+ *                          (Workers and Node both have it). A flat 16-colour
+ *                          card shrinks to a few KB, which matters because
+ *                          some unfurlers give up on large og:images.
  */
 
 const CRC_TABLE = (() => {
@@ -82,9 +86,21 @@ export interface IndexedImage {
 }
 
 export function encodeIndexedPng(image: IndexedImage): Uint8Array {
-  const { width, height, pixels, palette } = image;
-  if (palette.length > 16) throw new Error('palette must hold at most 16 colours');
+  return assemble(image, zlibStore(packRows(image)));
+}
 
+export async function encodeIndexedPngAsync(image: IndexedImage): Promise<Uint8Array> {
+  return assemble(image, await zlibDeflate(packRows(image)));
+}
+
+/** zlib (RFC 1950) stream. CompressionStream's "deflate" format is zlib-wrapped. */
+async function zlibDeflate(data: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('deflate'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function packRows(image: IndexedImage): Uint8Array {
+  const { width, height, pixels } = image;
   const bytesPerRow = Math.ceil(width / 2);
   const raw = new Uint8Array((bytesPerRow + 1) * height);
   for (let y = 0; y < height; y++) {
@@ -96,6 +112,12 @@ export function encodeIndexedPng(image: IndexedImage): Uint8Array {
       raw[rowStart + 1 + (x >> 1)] = (high << 4) | low;
     }
   }
+  return raw;
+}
+
+function assemble(image: IndexedImage, idat: Uint8Array): Uint8Array {
+  const { width, height, palette } = image;
+  if (palette.length > 16) throw new Error('palette must hold at most 16 colours');
 
   const ihdr = new Uint8Array(13);
   const view = new DataView(ihdr.buffer);
@@ -118,7 +140,7 @@ export function encodeIndexedPng(image: IndexedImage): Uint8Array {
     new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
     chunk('PLTE', plte),
-    chunk('IDAT', zlibStore(raw)),
+    chunk('IDAT', idat),
     chunk('IEND', new Uint8Array(0)),
   ];
 

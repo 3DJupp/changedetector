@@ -5,7 +5,7 @@
  * and Discord actually unfurl) and an SVG for humans who want a crisp download.
  * PNGs are cached in R2 by change id, so each card is rendered once.
  */
-import { Canvas, encodeIndexedPng } from '../lib/png';
+import { Canvas, encodeIndexedPngAsync } from '../lib/png';
 import { FONT_HEIGHT, FONT_WIDTH, glyphFor, textWidth, wrapText } from './font';
 import { escapeHtml } from '../lib/html';
 
@@ -14,9 +14,15 @@ export interface CardModel {
   before: string | null;
   after: string | null;
   delta: string | null;
-  severity: string;
-  detectedAt: string;
+  /** Severity chip top right. Null for cards that are not about one change. */
+  severity: string | null;
+  /** Rendered as "DETECTED <detectedAt>" unless footer is given. */
+  detectedAt?: string;
+  /** Left footer text, replacing the "DETECTED …" line. */
+  footer?: string;
   url: string;
+  /** Small label above the headline, e.g. the category or "DAILY DIGEST". */
+  kicker?: string;
   category?: string;
 }
 
@@ -24,7 +30,7 @@ const WIDTH = 1200;
 const HEIGHT = 630;
 
 /** Bump when the card layout changes, so cached PNGs are regenerated. */
-export const CARD_VERSION = 2;
+export const CARD_VERSION = 3;
 
 // Palette index map for the card.
 const PAPER = 0;
@@ -52,7 +58,8 @@ const PALETTE: [number, number, number][] = [
   [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0],
 ];
 
-function accentFor(severity: string): number {
+function accentFor(severity: string | null): number {
+  if (!severity) return RED;
   if (severity === 'MAJOR') return RED;
   if (severity === 'SIGNIFICANT' || severity === 'MODERATE') return AMBER;
   if (severity === 'MINOR') return BLUE;
@@ -88,8 +95,28 @@ function strikeThrough(canvas: Canvas, x: number, y: number, width: number, scal
   canvas.fillRect(x, y + Math.floor((FONT_HEIGHT * scale) / 2), width, Math.max(2, scale / 2), color);
 }
 
-/** Render the 1200x630 share card as PNG bytes. */
-export function renderCardPng(model: CardModel): Uint8Array {
+/**
+ * The bitmap font is ASCII plus a few symbols. Map what it cannot draw to the
+ * closest thing it can, instead of rendering "?" for every umlaut.
+ */
+export function cardText(text: string): string {
+  return text
+    .replace(/ß/g, 'ss')
+    .replace(/[Ææ]/g, 'AE')
+    .replace(/[Øø]/g, 'O')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[‘’‚′]/g, "'")
+    .replace(/[“”„″]/g, '"')
+    .replace(/[\u00a0\u2000-\u200b]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const FOOTER_RULE_Y = HEIGHT - 96;
+const CONTENT_TOP = 136;
+
+function drawCard(model: CardModel): Canvas {
   const canvas = new Canvas(WIDTH, HEIGHT, PAPER);
   const accent = accentFor(model.severity);
   const margin = 72;
@@ -99,8 +126,16 @@ export function renderCardPng(model: CardModel): Uint8Array {
   canvas.fillRect(margin, 72, 18, 18, RED);
   drawText(canvas, 'THE INTERNET CHANGE DETECTOR', margin + 34, 74, 2, GRAY, 2);
 
-  // Headline, wrapped.
-  const headline = model.headline.toUpperCase();
+  // Severity chip.
+  if (model.severity) {
+    const chip = model.severity.toUpperCase();
+    const chipWidth = textWidth(chip, 3, 2) + 28;
+    canvas.fillRect(WIDTH - margin - chipWidth, 66, chipWidth, 34, accent);
+    drawText(canvas, chip, WIDTH - margin - chipWidth + 14, 76, 3, PAPER, 2);
+  }
+
+  // Headline, wrapped and shrunk until it fits in four lines at most.
+  const headline = cardText(model.headline).toUpperCase();
   const maxWidth = WIDTH - margin * 2;
   let scale = 7;
   let lines = wrapText(headline, scale, maxWidth);
@@ -108,56 +143,86 @@ export function renderCardPng(model: CardModel): Uint8Array {
     scale -= 1;
     lines = wrapText(headline, scale, maxWidth);
   }
-  if (lines.length > 4) lines = [...lines.slice(0, 4)];
+  if (lines.length > 4) {
+    lines = lines.slice(0, 4);
+    lines[3] = lines[3].replace(/\s*\S*$/, '') + '…';
+  }
+  const lineHeight = FONT_HEIGHT * scale + Math.round(scale * 3.2);
+  const headlineHeight = lines.length * lineHeight - Math.round(scale * 3.2);
 
-  let y = 150;
+  const before = model.before ? cardText(model.before) : null;
+  const after = model.after ? cardText(model.after) : null;
+  const delta = model.delta ? cardText(model.delta) : null;
+  const kicker = model.kicker ? cardText(model.kicker).toUpperCase() : null;
+
+  // Lay the block out as a whole and centre it between brand line and footer,
+  // instead of pinning the values to a fixed row and leaving a hole.
+  const kickerHeight = kicker ? FONT_HEIGHT * 3 + 22 : 0;
+  const valueScale = before && after ? 8 : 7;
+  const valueHeight = before && after ? FONT_HEIGHT * valueScale : delta ? FONT_HEIGHT * valueScale : 0;
+  const valueGap = valueHeight ? 46 : 0;
+  const blockHeight = kickerHeight + headlineHeight + valueGap + valueHeight;
+  const available = FOOTER_RULE_Y - 40 - CONTENT_TOP;
+  let y = CONTENT_TOP + Math.max(0, Math.floor((available - blockHeight) / 2));
+
+  if (kicker) {
+    drawText(canvas, kicker, margin, y, 3, accent, 2);
+    y += kickerHeight;
+  }
   for (const line of lines) {
     drawText(canvas, line, margin, y, scale, INK);
-    y += FONT_HEIGHT * scale + Math.round(scale * 3.2);
+    y += lineHeight;
   }
+  y += valueGap - Math.round(scale * 3.2);
 
-  // Before → after row.
-  const valueTop = Math.max(y + 26, 380);
-  if (model.before && model.after) {
-    const bigScale = 8;
-    const beforeWidth = textWidth(model.before, bigScale);
-    drawText(canvas, model.before, margin, valueTop, bigScale, GRAY);
-    strikeThrough(canvas, margin, valueTop, beforeWidth, bigScale, GRAY);
-    let cursor = margin + beforeWidth + 34;
-    drawText(canvas, '→', cursor, valueTop, bigScale, GRAY);
-    cursor += textWidth('→', bigScale) + 34;
-    drawText(canvas, model.after, cursor, valueTop, bigScale, INK);
-    cursor += textWidth(model.after, bigScale) + 40;
-    if (model.delta) drawText(canvas, model.delta, cursor, valueTop + 14, 5, accent);
-  } else if (model.delta) {
-    drawText(canvas, model.delta, margin, valueTop, 8, accent);
+  if (before && after) {
+    let bigScale = valueScale;
+    const arrowGap = 34;
+    const rowWidth = (s: number) =>
+      textWidth(before, s) + textWidth(after, s) + textWidth('→', s) + arrowGap * 2 + (delta ? 40 + textWidth(delta, 5) : 0);
+    while (rowWidth(bigScale) > maxWidth && bigScale > 4) bigScale -= 1;
+    const top = y + Math.round(((valueScale - bigScale) * FONT_HEIGHT) / 2);
+    const beforeWidth = textWidth(before, bigScale);
+    drawText(canvas, before, margin, top, bigScale, GRAY);
+    strikeThrough(canvas, margin, top, beforeWidth, bigScale, GRAY);
+    let cursor = margin + beforeWidth + arrowGap;
+    drawText(canvas, '→', cursor, top, bigScale, GRAY);
+    cursor += textWidth('→', bigScale) + arrowGap;
+    drawText(canvas, after, cursor, top, bigScale, INK);
+    cursor += textWidth(after, bigScale) + 40;
+    if (delta) drawText(canvas, delta, cursor, top + Math.round((FONT_HEIGHT * (bigScale - 5)) / 2), 5, accent);
+  } else if (delta) {
+    let deltaScale = valueScale;
+    while (textWidth(delta, deltaScale) > maxWidth && deltaScale > 3) deltaScale -= 1;
+    drawText(canvas, delta, margin, y, deltaScale, accent);
   }
 
   // Footer: two texts that must never collide, so they are measured and, if
   // necessary, shrunk and elided before being drawn.
-  canvas.fillRect(margin, HEIGHT - 96, WIDTH - margin * 2, 3, RULE);
-  const available = WIDTH - margin * 2;
-  let left = `DETECTED ${model.detectedAt.toUpperCase()}`;
-  let right = model.url.replace(/^https?:\/\//, '').toUpperCase();
+  canvas.fillRect(margin, FOOTER_RULE_Y, WIDTH - margin * 2, 3, RULE);
+  const footerWidth = WIDTH - margin * 2;
+  let left = cardText(model.footer ?? (model.detectedAt ? `DETECTED ${model.detectedAt}` : '')).toUpperCase();
+  const fullRight = cardText(model.url.replace(/^https?:\/\//, '')).toUpperCase();
+  let right = fullRight;
   let footerScale = 3;
   const gap = 40;
-  const fits = () => textWidth(left, footerScale, 2) + textWidth(right, footerScale, 2) + gap <= available;
+  const fits = () => textWidth(left, footerScale, 2) + textWidth(right, footerScale, 2) + gap <= footerWidth;
 
   if (!fits()) left = left.replace(/ \d{2}:\d{2} UTC$/, ''); // drop the clock time first
   if (!fits()) footerScale = 2;
   while (!fits() && right.length > 12) right = right.slice(0, -2);
-  if (right !== model.url.replace(/^https?:\/\//, '').toUpperCase()) right += '…';
+  if (right !== fullRight) right += '…';
 
-  drawText(canvas, left, margin, HEIGHT - 68, footerScale, GRAY, 2);
+  if (left) drawText(canvas, left, margin, HEIGHT - 68, footerScale, GRAY, 2);
   drawText(canvas, right, WIDTH - margin - textWidth(right, footerScale, 2), HEIGHT - 68, footerScale, GRAY, 2);
 
-  // Severity chip.
-  const chip = model.severity.toUpperCase();
-  const chipWidth = textWidth(chip, 3, 2) + 28;
-  canvas.fillRect(WIDTH - margin - chipWidth, 66, chipWidth, 34, accent);
-  drawText(canvas, chip, WIDTH - margin - chipWidth + 14, 76, 3, PAPER, 2);
+  return canvas;
+}
 
-  return encodeIndexedPng({ width: WIDTH, height: HEIGHT, pixels: canvas.pixels, palette: PALETTE });
+/** Render the 1200x630 share card as a compressed PNG. */
+export async function renderCardPng(model: CardModel): Promise<Uint8Array> {
+  const canvas = drawCard(model);
+  return encodeIndexedPngAsync({ width: WIDTH, height: HEIGHT, pixels: canvas.pixels, palette: PALETTE });
 }
 
 /** The same card as SVG, for downloads and high-DPI embedding. */
@@ -194,8 +259,8 @@ export function renderCardSvg(model: CardModel): string {
   <rect width="1200" height="10" fill="${accentHex}"/>
   <rect x="72" y="72" width="18" height="18" fill="#D63B42"/>
   <text x="106" y="88" font-family="ui-monospace,Menlo,monospace" font-size="15" letter-spacing="3" fill="#5B6068">THE INTERNET CHANGE DETECTOR</text>
-  <rect x="${1128 - model.severity.length * 15}" y="66" width="${model.severity.length * 15}" height="34" fill="${accentHex}"/>
-  <text x="${1128 - model.severity.length * 15 + 12}" y="90" font-family="ui-monospace,Menlo,monospace" font-size="15" fill="#F4F2ED">${e(model.severity)}</text>
+  ${model.severity ? `<rect x="${1128 - model.severity.length * 15}" y="66" width="${model.severity.length * 15}" height="34" fill="${accentHex}"/>
+  <text x="${1128 - model.severity.length * 15 + 12}" y="90" font-family="ui-monospace,Menlo,monospace" font-size="15" fill="#F4F2ED">${e(model.severity)}</text>` : ''}
   ${shown
     .map(
       (line, index) =>
@@ -205,7 +270,7 @@ export function renderCardSvg(model: CardModel): string {
   ${values}
   ${model.delta && model.before ? `<text x="72" y="530" font-family="ui-monospace,Menlo,monospace" font-size="34" fill="${accentHex}">${e(model.delta)}</text>` : ''}
   <line x1="72" y1="546" x2="1128" y2="546" stroke="#D6D3CC" stroke-width="2"/>
-  <text x="72" y="580" font-family="ui-monospace,Menlo,monospace" font-size="16" fill="#7A8089">DETECTED ${e(model.detectedAt.toUpperCase())}</text>
+  <text x="72" y="580" font-family="ui-monospace,Menlo,monospace" font-size="16" fill="#7A8089">${e((model.footer ?? (model.detectedAt ? `DETECTED ${model.detectedAt}` : '')).toUpperCase())}</text>
   <text x="1128" y="580" text-anchor="end" font-family="ui-monospace,Menlo,monospace" font-size="16" fill="#7A8089">${e(model.url.replace(/^https?:\/\//, ''))}</text>
 </svg>`;
 }

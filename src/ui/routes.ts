@@ -34,6 +34,21 @@ function safeParse<T>(value: string | null, fallback: T): T {
   }
 }
 
+async function cachedPng(ctx: Ctx, key: string, maxAge: number, render: () => Promise<Uint8Array>): Promise<Response> {
+  const headers = { 'content-type': 'image/png', 'cache-control': `public, max-age=${maxAge}, s-maxage=${maxAge * 4}` };
+  const cached = await ctx.env.ARTIFACTS.get(key).catch(() => null);
+  if (cached) return new Response(cached.body, { headers });
+  const png = await render();
+  ctx.executionCtx.waitUntil(
+    ctx.env.ARTIFACTS.put(key, png as unknown as ArrayBuffer, {
+      httpMetadata: { contentType: 'image/png', cacheControl: 'public, max-age=31536000, immutable' },
+    })
+      .then(() => undefined)
+      .catch(() => undefined),
+  );
+  return new Response(png as unknown as BodyInit, { headers });
+}
+
 function notFound(ctx: Ctx, message = 'Not found'): Response {
   return html(
     layout({
@@ -197,30 +212,19 @@ export function registerUiRoutes(router: Router): void {
     const change = await ctx.repo.getChange(ctx.params.slug);
     if (!change) return new Response('not found', { status: 404 });
     const key = `og/v${CARD_VERSION}-${change.id}-${change.interestingness_score}.png`;
-    const cached = await ctx.env.ARTIFACTS.get(key).catch(() => null);
-    if (cached) {
-      return new Response(cached.body, {
-        headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400, s-maxage=604800' },
+    return cachedPng(ctx, key, 86400, async () => {
+      const site = await ctx.repo.getSite(change.site_id);
+      return renderCardPng({
+        kicker: site ? `${site.category} · ${hostOf(site.canonical_url)}` : undefined,
+        headline: change.headline,
+        before: change.before_value,
+        after: change.after_value,
+        delta: change.delta,
+        severity: change.severity,
+        detectedAt: stampShort(change.detected_at),
+        url: `${ctx.baseUrl.replace(/^https?:\/\//, '')}/changes/${change.slug}`,
+        category: site?.category,
       });
-    }
-    const site = await ctx.repo.getSite(change.site_id);
-    const png = renderCardPng({
-      headline: change.headline,
-      before: change.before_value,
-      after: change.after_value,
-      delta: change.delta,
-      severity: change.severity,
-      detectedAt: stampShort(change.detected_at),
-      url: `${ctx.baseUrl.replace(/^https?:\/\//, '')}/changes/${change.slug}`,
-      category: site?.category,
-    });
-    ctx.executionCtx.waitUntil(
-      ctx.env.ARTIFACTS.put(key, png as unknown as ArrayBuffer, {
-        httpMetadata: { contentType: 'image/png', cacheControl: 'public, max-age=31536000, immutable' },
-      }).then(() => undefined).catch(() => undefined),
-    );
-    return new Response(png as unknown as BodyInit, {
-      headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400, s-maxage=604800' },
     });
   });
 
@@ -241,20 +245,69 @@ export function registerUiRoutes(router: Router): void {
     });
   });
 
-  router.get('/og/default.png', async (ctx) => {
-    const stats = await ctx.repo.stats();
-    const png = renderCardPng({
-      headline: 'The internet changes. We keep receipts.',
-      before: null,
-      after: null,
-      delta: `${stats.sites} PAGES WATCHED`,
-      severity: 'MAJOR',
-      detectedAt: stampShort(Math.floor(Date.now() / 1000)),
-      url: ctx.baseUrl.replace(/^https?:\/\//, ''),
-    });
-    return new Response(png as unknown as BodyInit, {
-      headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=3600' },
-    });
+  // Default, digest and per-site cards. Rendered once and kept in R2 under a
+  // key that changes whenever what the card shows changes.
+  router.get('/og/:name', async (ctx) => {
+    const host = ctx.baseUrl.replace(/^https?:\/\//, '');
+    const name = ctx.params.name;
+
+    if (name === 'default.png') {
+      const stats = await ctx.repo.stats();
+      return cachedPng(ctx, `og/v${CARD_VERSION}-default-${stats.sites}-${stats.publishedChanges}.png`, 3600, () =>
+        renderCardPng({
+          headline: 'The internet changes. We keep receipts.',
+          before: null,
+          after: null,
+          delta: `${stats.sites.toLocaleString('en-US')} pages watched`,
+          severity: null,
+          footer: `${stats.publishedChanges.toLocaleString('en-US')} changes on record`,
+          url: host,
+        }),
+      );
+    }
+
+    const digestMatch = /^digest-(\d{4}-\d{2}-\d{2})\.png$/.exec(name);
+    if (digestMatch) {
+      const day = digestMatch[1];
+      const digest = await ctx.repo.getDigest(day);
+      if (!digest) return new Response('not found', { status: 404 });
+      const ids = safeParse<string[]>(digest.change_ids, []);
+      const top = ids.length ? await ctx.repo.getChange(ids[0]) : null;
+      const stats = safeParse(digest.stats, { detected: 0, published: 0, sites: 0 });
+      const label = new Date(`${day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+      return cachedPng(ctx, `og/v${CARD_VERSION}-digest-${day}-${ids.join('.').slice(0, 80)}.png`, 86400, () =>
+        renderCardPng({
+          kicker: `Daily digest · ${label}`,
+          headline: top ? top.headline : 'The Internet Changed Today',
+          before: top?.before_value ?? null,
+          after: top?.after_value ?? null,
+          delta: top ? top.delta : null,
+          severity: null,
+          footer: ids.length > 1 ? `+${ids.length - 1} more · ${stats.detected} detected` : `${stats.detected} changes detected`,
+          url: `${host}/digest/${day}`,
+        }),
+      );
+    }
+    return new Response('not found', { status: 404 });
+  });
+
+  router.get('/sites/:id/og.png', async (ctx) => {
+    const site = await ctx.repo.getSite(ctx.params.id);
+    if (!site) return new Response('not found', { status: 404 });
+    const host = ctx.baseUrl.replace(/^https?:\/\//, '');
+    const changes = site.change_count;
+    return cachedPng(ctx, `og/v${CARD_VERSION}-site-${site.id}-${changes}-${site.last_changed_at ?? 0}.png`, 86400, () =>
+      renderCardPng({
+        kicker: `${site.category} · ${hostOf(site.canonical_url)}`,
+        headline: site.title ?? hostOf(site.canonical_url),
+        before: null,
+        after: null,
+        delta: changes === 1 ? '1 change on record' : `${changes.toLocaleString('en-US')} changes on record`,
+        severity: null,
+        footer: site.last_changed_at ? `Last change ${stampShort(site.last_changed_at)}` : `Watched since ${stampShort(site.created_at)}`,
+        url: `${host}/sites/${site.id}`,
+      }),
+    );
   });
 
   // --- sites --------------------------------------------------------------
