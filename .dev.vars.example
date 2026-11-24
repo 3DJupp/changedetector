@@ -1,0 +1,9 @@
+# Copy to .dev.vars for local development (never commit .dev.vars).
+ADMIN_TOKEN=dev-admin-token-change-me
+# Kubo RPC or pinning-service token, used when CONTENT_STORE=ipfs-http
+IPFS_API_TOKEN=
+# Transactional email for digests / alerts (optional)
+RESEND_API_KEY=
+EMAIL_FROM=digest@changedetector.local
+# Optional hosted-LLM fallback when Workers AI is unavailable
+ANTHROPIC_API_KEY=

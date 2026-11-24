@@ -1,0 +1,30 @@
+{
+  "name": "internet-change-detector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Internet Change Detector - continuous monitoring, verifiable snapshots and shareable change events for public web pages.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "wrangler dev --local",
+    "dev:remote-ai": "wrangler dev",
+    "start": "wrangler dev --local",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "wrangler d1 migrations apply changedetector --local",
+    "db:migrate:remote": "wrangler d1 migrations apply changedetector --remote",
+    "db:seed:sql": "node --experimental-transform-types --no-warnings scripts/seed-sql.mjs",
+    "db:seed:local": "npm run db:seed:sql && wrangler d1 execute changedetector --local --file=./seed/sites.sql",
+    "db:seed:remote": "npm run db:seed:sql && wrangler d1 execute changedetector --remote --file=./seed/sites.sql",
+    "db:reset:local": "rm -rf .wrangler/state/v3/d1 && npm run db:migrate:local && npm run db:seed:local",
+    "cf-typegen": "wrangler types"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260908.1",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.20.0"
+  }
+}
