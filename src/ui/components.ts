@@ -1,4 +1,5 @@
 /** Shared server-rendered UI pieces. */
+import { changePath } from '../lib/paths';
 import { escapeHtml } from '../lib/html';
 import { COLORS, SEVERITY_COLORS } from './theme';
 
@@ -101,7 +102,7 @@ export function changeCard(change: ChangeCardModel): string {
         ? `<div class="bigrow"><span class="now">${e(change.delta)}</span></div>`
         : '';
 
-  return `<a class="card" href="/changes/${e(change.slug)}" style="border-left:3px solid ${s.color}">
+  return `<a class="card" href="${e(changePath(change))}" style="border-left:3px solid ${s.color}">
   <div class="top">${badge(change.severity)}<span class="mono" style="font-size:9px;color:${COLORS.dim}">${e(timeAgo(change.detected_at))}</span></div>
   <div class="site">${e(change.site.title ?? hostOf(url))}</div>
   <div class="path">${e(pathOf(url))}</div>

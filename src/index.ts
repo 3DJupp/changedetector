@@ -9,7 +9,7 @@
 import type { Env, Job } from './types';
 import { Router, Ctx, problem } from './router';
 import { Repo } from './db/repo';
-import { registerUiRoutes } from './ui/routes';
+import { notFound, registerUiRoutes } from './ui/routes';
 import { registerApiRoutes } from './api/routes';
 import { registerAdminRoutes } from './api/admin-routes';
 import { sweep } from './pipeline/scheduler';
@@ -47,9 +47,7 @@ export default {
     const matched = router.match(request.method, url.pathname);
     if (!matched) {
       if (url.pathname.startsWith('/api/')) return problem(404, 'No such endpoint');
-      const fallback = router.match('GET', '/');
-      if (!fallback) return new Response('Not found', { status: 404 });
-      return new Response('Not found', { status: 404, headers: { 'content-type': 'text/plain' } });
+      return notFound({ url, baseUrl: baseUrlFor(request, env) }, 'There is nothing at this address');
     }
 
     const ctx: Ctx = {
@@ -94,6 +92,7 @@ export default {
           console.error('digest failed', error);
         }
       }
+      await repo.backfillSiteSlugs(50).catch((error) => console.error('slug backfill failed', error));
       const result = await sweep(env, repo, executionCtx);
       console.log('sweep', JSON.stringify(result));
       await deliverPending(env, repo, 25).catch((error) => console.error('notify failed', error));

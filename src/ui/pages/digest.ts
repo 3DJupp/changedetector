@@ -1,4 +1,6 @@
 /** "The Internet Changed Today" — the daily digest, shared by page and email. */
+import { breadcrumbJsonLd, metaDescription } from '../seo';
+import { changePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite } from '../../types';
 import { layout } from '../layout';
 import { e, stampShort } from '../components';
@@ -18,7 +20,7 @@ export function digestBodyHtml(props: DigestProps, forEmail = false): string {
       (change, index) => `<div class="row" style="display:flex;gap:20px;padding:20px 0;flex-wrap:wrap">
     <div class="mono" style="flex:0 0 34px;font-size:19px;letter-spacing:-.06em;color:#A8ADB4">${String(index + 1).padStart(2, '0')}</div>
     <div style="flex:1 1 240px;min-width:0">
-      <div style="font-size:16.5px;font-weight:700;letter-spacing:-.028em;line-height:1.25"><a href="${props.baseUrl}/changes/${e(change.slug)}" style="color:#16181C">${e(change.headline)}</a></div>
+      <div style="font-size:16.5px;font-weight:700;letter-spacing:-.028em;line-height:1.25"><a href="${props.baseUrl}${e(changePath(change))}" style="color:#16181C">${e(change.headline)}</a></div>
       <div style="font-size:13.5px;color:#5B6068;margin-top:5px;line-height:1.45">${e(change.summary)}</div>
     </div>
     <div style="flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
@@ -59,9 +61,36 @@ export function digestPage(props: DigestProps): string {
   ${digestBodyHtml(props)}
 </div>`;
 
+  const dayLabel = new Date(`${props.day}T00:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  const url = `${props.baseUrl}/digest/${props.day}`;
   return layout({
-    title: `The Internet Changed Today — ${props.day}`,
-    description: props.intro,
+    title: `The Internet Changed Today — ${dayLabel}`,
+    description: metaDescription(props.intro || `The most meaningful web page changes detected on ${dayLabel}.`),
+    rssPath: '/digest.xml',
+    rssTitle: 'The Internet Changed Today',
+    jsonLd: [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: `The Internet Changed Today — ${dayLabel}`,
+        url,
+        datePublished: `${props.day}T07:00:00Z`,
+        isPartOf: { '@id': `${props.baseUrl}/#website` },
+        mainEntity: {
+          '@type': 'ItemList',
+          itemListElement: props.changes.map((change, index) => ({
+            '@type': 'ListItem',
+            position: index + 1,
+            url: `${props.baseUrl}${changePath(change)}`,
+            name: change.headline,
+          })),
+        },
+      },
+      breadcrumbJsonLd(props.baseUrl, [
+        { name: 'Daily digest', path: '/digest' },
+        { name: dayLabel, path: `/digest/${props.day}` },
+      ]),
+    ],
     path: `/digest/${props.day}`,
     baseUrl: props.baseUrl,
     active: 'digest',

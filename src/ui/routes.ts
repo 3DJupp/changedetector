@@ -11,6 +11,7 @@ import { aboutPage, apiPage, sitesPage } from './pages/misc';
 import { snapshotPage } from './pages/snapshot';
 import { CARD_VERSION, renderCardPng, renderCardSvg } from './og';
 import { rssFeed, xml } from './rss';
+import { FAVICON_SVG, icoFromPng, iconPng, webManifest } from './icons';
 import { CATEGORIES } from '../types';
 import type { ChangeEvent, MonitoredSite } from '../types';
 import { DiffRow } from '../lib/diff';
@@ -23,6 +24,7 @@ import { buildDigest } from '../pipeline/digest';
 import { diffLines, buildRows, buildHunks, computeStats } from '../lib/diff';
 import { decodeBody } from '../pipeline/crawl';
 import { escapeHtml } from '../lib/html';
+import { categoryFromSlug, categoryPath, changeKey, changePath, sitePath } from '../lib/paths';
 import { hybridSearch } from '../lib/semantic';
 
 function safeParse<T>(value: string | null, fallback: T): T {
@@ -49,7 +51,16 @@ async function cachedPng(ctx: Ctx, key: string, maxAge: number, render: () => Pr
   return new Response(png as unknown as BodyInit, { headers });
 }
 
-function notFound(ctx: Ctx, message = 'Not found'): Response {
+const FEED_PAGE_SIZE = 24;
+const SITEMAP_CHUNK = 5000;
+
+function sitemapXml(body: string): Response {
+  return new Response(body, {
+    headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' },
+  });
+}
+
+export function notFound(ctx: Pick<Ctx, 'url' | 'baseUrl'>, message = 'Not found'): Response {
   return html(
     layout({
       title: '404 — not found',
@@ -68,13 +79,15 @@ function notFound(ctx: Ctx, message = 'Not found'): Response {
 
 export function registerUiRoutes(router: Router): void {
   // --- feed ---------------------------------------------------------------
-  router.get('/', async (ctx) => {
-    const category = ctx.url.searchParams.get('category') || 'All';
+  const feedHandler = async (ctx: Ctx, category: string): Promise<Response> => {
     const order = ctx.url.searchParams.get('order') === 'recent' ? 'recent' : 'interesting';
+    const page = Math.max(1, Number.parseInt(ctx.url.searchParams.get('page') ?? '1', 10) || 1);
     const [{ changes, total }, stats] = await Promise.all([
-      ctx.repo.listChanges({ category, order, limit: 24 }),
+      ctx.repo.listChanges({ category, order, limit: FEED_PAGE_SIZE, offset: (page - 1) * FEED_PAGE_SIZE }),
       ctx.repo.stats(),
     ]);
+    const pages = Math.max(1, Math.ceil(total / FEED_PAGE_SIZE));
+    if (page > pages) return notFound(ctx, 'There are no changes on that page');
     const latestCheck = await ctx.repo.recentCrawlLogs(1);
     const lastSweep = latestCheck.length
       ? timeAgo(Number((latestCheck[0] as Record<string, unknown>).started_at)).toUpperCase()
@@ -90,18 +103,38 @@ export function registerUiRoutes(router: Router): void {
         total,
         category,
         order,
+        page,
+        pages,
         stats,
         lastSweep,
       }),
       200,
       { 'cache-control': 'public, max-age=30, s-maxage=120' },
     );
+  };
+
+  router.get('/', async (ctx) => {
+    // Old filter URLs (/?category=Pricing) move to their own landing pages.
+    const legacy = ctx.url.searchParams.get('category');
+    if (legacy && legacy !== 'All' && CATEGORIES.includes(legacy as never)) {
+      const target = new URL(categoryPath(legacy), ctx.baseUrl);
+      for (const [key, value] of ctx.url.searchParams) if (key !== 'category') target.searchParams.set(key, value);
+      return redirect(target.pathname + target.search, 301);
+    }
+    return feedHandler(ctx, 'All');
+  });
+
+  router.get('/category/:slug', async (ctx) => {
+    const category = categoryFromSlug(ctx.params.slug);
+    if (!category) return notFound(ctx, 'There is no such category');
+    return feedHandler(ctx, category);
   });
 
   // --- change event -------------------------------------------------------
   router.get('/changes/:slug', async (ctx) => {
-    const change = await ctx.repo.getChange(ctx.params.slug);
+    const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
     if (!change) return notFound(ctx, 'That change event does not exist');
+    if (ctx.url.pathname !== changePath(change)) return redirect(changePath(change) + ctx.url.search, 301);
     const [site, previous, current] = await Promise.all([
       ctx.repo.getSite(change.site_id),
       change.previous_snapshot_id ? ctx.repo.getSnapshot(change.previous_snapshot_id) : Promise.resolve(null),
@@ -138,8 +171,9 @@ export function registerUiRoutes(router: Router): void {
   });
 
   router.get('/changes/:slug/diff', async (ctx) => {
-    const change = await ctx.repo.getChange(ctx.params.slug);
+    const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
     if (!change) return notFound(ctx, 'That change event does not exist');
+    if (ctx.url.pathname !== `${changePath(change)}/diff`) return redirect(`${changePath(change)}/diff${ctx.url.search}`, 301);
     const [site, previous, current] = await Promise.all([
       ctx.repo.getSite(change.site_id),
       change.previous_snapshot_id ? ctx.repo.getSnapshot(change.previous_snapshot_id) : Promise.resolve(null),
@@ -209,7 +243,7 @@ export function registerUiRoutes(router: Router): void {
 
   // --- share cards --------------------------------------------------------
   router.get('/changes/:slug/og.png', async (ctx) => {
-    const change = await ctx.repo.getChange(ctx.params.slug);
+    const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
     if (!change) return new Response('not found', { status: 404 });
     const key = `og/v${CARD_VERSION}-${change.id}-${change.interestingness_score}.png`;
     return cachedPng(ctx, key, 86400, async () => {
@@ -229,7 +263,7 @@ export function registerUiRoutes(router: Router): void {
   });
 
   router.get('/changes/:slug/card.svg', async (ctx) => {
-    const change = await ctx.repo.getChange(ctx.params.slug);
+    const change = await ctx.repo.getChange(changeKey(ctx.params.slug));
     if (!change) return new Response('not found', { status: 404 });
     const svg = renderCardSvg({
       headline: change.headline,
@@ -322,6 +356,8 @@ export function registerUiRoutes(router: Router): void {
   router.get('/sites/:id', async (ctx) => {
     const site = await ctx.repo.getSite(ctx.params.id);
     if (!site) return notFound(ctx, 'That monitored page does not exist');
+    if (!site.slug) site.slug = await ctx.repo.ensureSiteSlug(site);
+    if (ctx.params.id !== site.slug) return redirect(sitePath(site) + ctx.url.search, 301);
     const [{ changes }, snapshots, weekly] = await Promise.all([
       ctx.repo.listChanges({ siteId: site.id, order: 'recent', limit: 20, includeUnpublished: true }),
       ctx.repo.listSnapshots(site.id, 25),
@@ -498,6 +534,23 @@ export function registerUiRoutes(router: Router): void {
   router.get('/about', async (ctx) => html(aboutPage(ctx.baseUrl), 200, { 'cache-control': 'public, max-age=3600' }));
   router.get('/api', async (ctx) => html(apiPage(ctx.baseUrl), 200, { 'cache-control': 'public, max-age=3600' }));
 
+  // --- icons and manifest -------------------------------------------------
+  const ICON_CACHE = { 'cache-control': 'public, max-age=604800, s-maxage=2592000' };
+  router.get('/favicon.svg', () => new Response(FAVICON_SVG, { headers: { 'content-type': 'image/svg+xml', ...ICON_CACHE } }));
+  router.get('/favicon.ico', async () =>
+    new Response(icoFromPng(await iconPng(32), 32) as unknown as BodyInit, { headers: { 'content-type': 'image/x-icon', ...ICON_CACHE } }),
+  );
+  const pngIcon = (size: number, padding = 0) => async () =>
+    new Response((await iconPng(size, padding)) as unknown as BodyInit, { headers: { 'content-type': 'image/png', ...ICON_CACHE } });
+  router.get('/apple-touch-icon.png', pngIcon(180));
+  router.get('/icon-192.png', pngIcon(192));
+  router.get('/icon-512.png', pngIcon(512));
+  // Maskable icons get cropped to a circle; keep the mark inside the safe zone.
+  router.get('/icon-maskable-512.png', pngIcon(512, 52));
+  router.get('/manifest.webmanifest', () =>
+    new Response(webManifest(), { headers: { 'content-type': 'application/manifest+json', ...ICON_CACHE } }),
+  );
+
   router.get('/robots.txt', async (ctx) =>
     new Response(
       `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /snapshots/*/raw\nDisallow: /search\nDisallow: /confirm\nDisallow: /unsubscribe\n\nSitemap: ${ctx.baseUrl}/sitemap.xml\n`,
@@ -505,25 +558,47 @@ export function registerUiRoutes(router: Router): void {
     ),
   );
 
+  // Sitemap index plus sub-sitemaps, each well under the 50,000 URL limit.
   router.get('/sitemap.xml', async (ctx) => {
-    const [{ changes }, { sites }] = await Promise.all([
-      ctx.repo.listChanges({ order: 'recent', limit: 500 }),
-      ctx.repo.listSites({ limit: 500 }),
-    ]);
-    const urls = [
-      `${ctx.baseUrl}/`,
-      `${ctx.baseUrl}/about`,
-      `${ctx.baseUrl}/api`,
-      `${ctx.baseUrl}/sites`,
-      `${ctx.baseUrl}/digest`,
-      ...sites.map((site) => `${ctx.baseUrl}/sites/${site.id}`),
-      ...changes.map((change) => `${ctx.baseUrl}/changes/${change.slug}`),
-    ];
-    return new Response(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls
-        .map((url) => `  <url><loc>${escapeHtml(url)}</loc></url>`)
+    const total = await ctx.repo.countPublishedChanges();
+    const changeFiles = Math.max(1, Math.ceil(total / SITEMAP_CHUNK));
+    const files = ['pages', 'sites', 'digests', ...Array.from({ length: changeFiles }, (_, i) => `changes-${i + 1}`)];
+    return sitemapXml(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${files
+        .map((file) => `  <sitemap><loc>${escapeHtml(`${ctx.baseUrl}/sitemaps/${file}.xml`)}</loc></sitemap>`)
+        .join('\n')}\n</sitemapindex>`,
+    );
+  });
+
+  router.get('/sitemaps/:file', async (ctx) => {
+    const file = ctx.params.file;
+    const entries: { loc: string; lastmod?: number }[] = [];
+    if (file === 'pages.xml') {
+      const [latest, perCategory] = await Promise.all([ctx.repo.listChanges({ order: 'recent', limit: 1 }), ctx.repo.categoryLastChanged()]);
+      const newest = latest.changes[0]?.detected_at;
+      entries.push({ loc: '/', lastmod: newest }, { loc: '/sites' }, { loc: '/digest', lastmod: newest }, { loc: '/about' }, { loc: '/api' });
+      for (const category of CATEGORIES) {
+        if (perCategory[category]) entries.push({ loc: categoryPath(category), lastmod: perCategory[category] });
+      }
+    } else if (file === 'sites.xml') {
+      for (const site of await ctx.repo.sitemapSites()) entries.push({ loc: sitePath(site), lastmod: site.lastmod });
+    } else if (file === 'digests.xml') {
+      for (const digest of await ctx.repo.sitemapDigests()) entries.push({ loc: `/digest/${digest.day}`, lastmod: digest.created_at });
+    } else {
+      const match = /^changes-(\d+)\.xml$/.exec(file);
+      if (!match) return new Response('not found', { status: 404 });
+      const index = Number.parseInt(match[1], 10);
+      const rows = await ctx.repo.sitemapChanges((index - 1) * SITEMAP_CHUNK, SITEMAP_CHUNK);
+      if (!rows.length && index > 1) return new Response('not found', { status: 404 });
+      for (const row of rows) entries.push({ loc: changePath(row), lastmod: row.detected_at });
+    }
+    return sitemapXml(
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${entries
+        .map(
+          (entry) =>
+            `  <url><loc>${escapeHtml(ctx.baseUrl + entry.loc)}</loc>${entry.lastmod ? `<lastmod>${new Date(entry.lastmod * 1000).toISOString()}</lastmod>` : ''}</url>`,
+        )
         .join('\n')}\n</urlset>`,
-      { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' } },
     );
   });
 

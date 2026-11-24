@@ -1,4 +1,5 @@
 /** Search across sites, URLs, headlines, summaries and categories. */
+import { changePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite } from '../../types';
 import { layout } from '../layout';
 import { badge, e, hostOf, pathOf, severityStyle, timeAgo } from '../components';
@@ -45,7 +46,7 @@ export function searchPage(props: SearchProps): string {
           ? props.results
               .map((change) => {
                 const s = severityStyle(change.severity);
-                return `<a class="row" href="/changes/${e(change.slug)}">
+                return `<a class="row" href="${e(changePath(change))}">
         <div style="flex:0 0 86px;display:flex;flex-direction:column;gap:6px">
           ${badge(change.severity)}
           <span class="mono" style="font-size:9px;color:#93A0B0">${e(timeAgo(change.detected_at))}</span>
@@ -72,6 +73,6 @@ export function searchPage(props: SearchProps): string {
     active: 'search',
     query: props.query,
     body,
-    noindex: Boolean(props.query),
+    noindex: props.query ? true : 'noindex,follow',
   });
 }

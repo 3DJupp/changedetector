@@ -1,4 +1,5 @@
 /** Snapshot detail and verification. Archived HTML is never rendered live. */
+import { sitePath } from '../../lib/paths';
 import type { MonitoredSite, Snapshot } from '../../types';
 import { layout } from '../layout';
 import { e, hostOf, stampShort } from '../components';
@@ -28,7 +29,7 @@ export function snapshotPage(props: SnapshotProps): string {
   ];
 
   const body = `<div class="wrap-narrow">
-  <div style="padding:24px 0 0"><a class="label" href="/sites/${e(props.site.id)}">← ${e(props.site.title ?? hostOf(props.site.canonical_url))}</a></div>
+  <div style="padding:24px 0 0"><a class="label" href="${e(sitePath(props.site))}">← ${e(props.site.title ?? hostOf(props.site.canonical_url))}</a></div>
   <section style="padding:22px 0 26px;border-bottom:1px solid rgba(255,255,255,.09)">
     <div class="label">ARCHIVED SNAPSHOT</div>
     <h1 style="margin:14px 0 0;font-size:30px;letter-spacing:-.04em;font-weight:800">${e(props.site.title ?? hostOf(props.site.canonical_url))}</h1>
@@ -87,6 +88,7 @@ export function snapshotPage(props: SnapshotProps): string {
 
   return layout({
     title: `Snapshot ${snapshot.cid ? snapshot.cid.slice(0, 14) : snapshot.id}`,
+    noindex: 'noindex,follow',
     description: `Archived capture of ${props.site.canonical_url} from ${stampShort(snapshot.captured_at)}.`,
     path: `/snapshots/${snapshot.id}`,
     baseUrl: props.baseUrl,

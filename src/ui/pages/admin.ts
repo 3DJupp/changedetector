@@ -1,4 +1,5 @@
 /** Monitoring console: add, pause, force-crawl, inspect, tune. */
+import { sitePath } from '../../lib/paths';
 import type { MonitoredSite } from '../../types';
 import { CATEGORIES, INTERVAL_PRESETS } from '../../types';
 import { layout } from '../layout';
@@ -79,7 +80,7 @@ export function adminPage(props: AdminProps): string {
   const rows = props.sites
     .map(
       (site) => `<div class="row">
-    <span class="mono" style="flex:1 1 240px;min-width:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="/sites/${e(site.id)}">${e(hostOf(site.canonical_url))}${e(new URL(site.canonical_url).pathname)}</a></span>
+    <span class="mono" style="flex:1 1 240px;min-width:0;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><a href="${e(sitePath(site))}">${e(hostOf(site.canonical_url))}${e(new URL(site.canonical_url).pathname)}</a></span>
     <span style="flex:0 0 88px">${statusPill(site.status)}</span>
     <span style="flex:0 0 88px;font-size:12px;color:#8892A0">${Math.round(site.crawl_interval_s / 60)} min</span>
     <span style="flex:0 0 100px;font-size:12px;color:#8892A0">${site.last_checked_at ? e(timeAgo(site.last_checked_at)) : 'never'}</span>
@@ -90,7 +91,7 @@ export function adminPage(props: AdminProps): string {
           ? `<form method="post" action="/admin/sites/${e(site.id)}/crawl"><button class="btn btn-ghost btn-sm" type="submit">Crawl</button></form>
              <form method="post" action="/admin/sites/${e(site.id)}/toggle"><button class="btn btn-ghost btn-sm" type="submit">${site.status === 'PAUSED' ? 'Resume' : 'Pause'}</button></form>
              <form method="post" action="/admin/sites/${e(site.id)}/delete" onsubmit="return confirm('Remove this site and all of its history?')"><button class="btn btn-ghost btn-sm" type="submit">Remove</button></form>`
-          : `<a class="btn btn-ghost btn-sm" href="/sites/${e(site.id)}">Inspect</a>`
+          : `<a class="btn btn-ghost btn-sm" href="${e(sitePath(site))}">Inspect</a>`
       }
     </span>
     ${site.last_error ? `<span style="flex:1 1 100%;font-size:11.5px;color:${COLORS.red}">${e(site.last_error)}</span>` : ''}

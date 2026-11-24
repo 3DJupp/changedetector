@@ -3,6 +3,7 @@
  */
 import type { ChangeEvent, Env, MonitoredSite, Snapshot } from '../types';
 import { newId, newSlug } from '../lib/hash';
+import { siteSlugBase } from '../lib/paths';
 
 export const now = () => Math.floor(Date.now() / 1000);
 
@@ -39,11 +40,45 @@ export class Repo {
         input.normalization ?? null, input.robotsAllowed === false ? 0 : 1, ts, ts, ts,
       )
       .run();
-    return (await this.getSite(id))!;
+    const created = (await this.getSite(id))!;
+    created.slug = await this.ensureSiteSlug(created);
+    return created;
   }
 
-  async getSite(id: string): Promise<MonitoredSite | null> {
-    return this.db.prepare('SELECT * FROM monitored_sites WHERE id = ?').bind(id).first<MonitoredSite>();
+  /** Looks a site up by id or by its readable slug. */
+  async getSite(idOrSlug: string): Promise<MonitoredSite | null> {
+    return this.db
+      .prepare('SELECT * FROM monitored_sites WHERE id = ? OR slug = ? LIMIT 1')
+      .bind(idOrSlug, idOrSlug)
+      .first<MonitoredSite>();
+  }
+
+  /** Gives a site a unique readable slug if it has none. Returns the slug. */
+  async ensureSiteSlug(site: Pick<MonitoredSite, 'id' | 'slug' | 'title' | 'canonical_url'>): Promise<string> {
+    if (site.slug) return site.slug;
+    const base = siteSlugBase(site);
+    for (let attempt = 1; attempt <= 50; attempt++) {
+      const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+      // Never let a slug look like an id, or lookups by id could be shadowed.
+      if (/^site_[0-9a-f]+$/.test(candidate)) continue;
+      const result = await this.db
+        .prepare('UPDATE monitored_sites SET slug = ? WHERE id = ? AND slug IS NULL AND NOT EXISTS (SELECT 1 FROM monitored_sites WHERE slug = ?)')
+        .bind(candidate, site.id, candidate)
+        .run();
+      if ((result.meta?.changes ?? 0) > 0) return candidate;
+      const current = await this.db.prepare('SELECT slug FROM monitored_sites WHERE id = ?').bind(site.id).first<{ slug: string | null }>();
+      if (current?.slug) return current.slug;
+    }
+    return site.id;
+  }
+
+  async backfillSiteSlugs(limit = 50): Promise<number> {
+    const rows = await this.db
+      .prepare('SELECT id, slug, title, canonical_url FROM monitored_sites WHERE slug IS NULL LIMIT ?')
+      .bind(limit)
+      .all<Pick<MonitoredSite, 'id' | 'slug' | 'title' | 'canonical_url'>>();
+    for (const row of rows.results ?? []) await this.ensureSiteSlug(row);
+    return rows.results?.length ?? 0;
   }
 
   async getSiteByCanonical(canonicalUrl: string): Promise<MonitoredSite | null> {
@@ -383,6 +418,56 @@ export class Repo {
         ...row,
         site: { id: row.site_pk, title: row.site_title, canonical_url: row.site_url, category: row.site_category, host: row.site_host },
       }));
+  }
+
+  // --- sitemap ------------------------------------------------------------
+
+  async countPublishedChanges(): Promise<number> {
+    const row = await this.db
+      .prepare('SELECT COUNT(*) AS c FROM change_events WHERE published = 1 AND false_positive = 0')
+      .first<{ c: number }>();
+    return row?.c ?? 0;
+  }
+
+  async sitemapChanges(offset: number, limit: number) {
+    const rows = await this.db
+      .prepare(
+        `SELECT slug, headline, detected_at FROM change_events
+         WHERE published = 1 AND false_positive = 0
+         ORDER BY detected_at ASC, id ASC LIMIT ? OFFSET ?`,
+      )
+      .bind(limit, offset)
+      .all<{ slug: string; headline: string; detected_at: number }>();
+    return rows.results ?? [];
+  }
+
+  async sitemapSites() {
+    const rows = await this.db
+      .prepare(
+        `SELECT id, slug, category, COALESCE(last_changed_at, updated_at, created_at) AS lastmod
+         FROM monitored_sites WHERE status != 'ARCHIVED' ORDER BY created_at LIMIT 50000`,
+      )
+      .all<{ id: string; slug: string | null; category: string; lastmod: number }>();
+    return rows.results ?? [];
+  }
+
+  async sitemapDigests() {
+    const rows = await this.db
+      .prepare(`SELECT day, created_at FROM digests WHERE change_ids != '[]' ORDER BY day DESC LIMIT 50000`)
+      .all<{ day: string; created_at: number }>();
+    return rows.results ?? [];
+  }
+
+  /** Last published change per category, for category lastmod. */
+  async categoryLastChanged(): Promise<Record<string, number>> {
+    const rows = await this.db
+      .prepare(
+        `SELECT s.category AS category, MAX(c.detected_at) AS last FROM change_events c
+         JOIN monitored_sites s ON s.id = c.site_id
+         WHERE c.published = 1 AND c.false_positive = 0 GROUP BY s.category`,
+      )
+      .all<{ category: string; last: number }>();
+    return Object.fromEntries((rows.results ?? []).map((row) => [row.category, row.last]));
   }
 
   // --- crawl logs & metrics ----------------------------------------------

@@ -13,9 +13,16 @@ export interface LayoutOptions {
   canonical?: string;
   active?: string;
   query?: string;
+  /** One JSON-LD object or several; each becomes its own script tag. */
   jsonLd?: unknown;
   narrow?: boolean;
-  noindex?: boolean;
+  /** true means "noindex,nofollow"; a string is used as the robots value. */
+  noindex?: boolean | string;
+  prev?: string;
+  next?: string;
+  /** Extra RSS feed for this page, e.g. a category or site feed. */
+  rssPath?: string;
+  rssTitle?: string;
 }
 
 const NAV = [
@@ -27,13 +34,15 @@ const NAV = [
   { key: 'admin', label: 'Admin', href: '/admin' },
 ];
 
-const FAVICON =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230E1116'/%3E%3Crect x='9' y='9' width='14' height='14' fill='%23F2545B'/%3E%3C/svg%3E";
+const FONTS =
+  'https://fonts.googleapis.com/css2?family=Public+Sans:wght@300..800&family=Martian+Mono:wght@300;400;500;600&display=swap';
 
 export function layout(options: LayoutOptions): string {
   const e = escapeHtml;
   const canonical = options.canonical ?? `${options.baseUrl}${options.path}`;
   const ogImage = options.ogImage ?? `${options.baseUrl}/og/default.png`;
+  const robots = options.noindex === true ? 'noindex,nofollow' : options.noindex || '';
+  const jsonLd = options.jsonLd === undefined ? [] : Array.isArray(options.jsonLd) ? options.jsonLd : [options.jsonLd];
 
   return `<!doctype html>
 <html lang="en">
@@ -42,10 +51,16 @@ export function layout(options: LayoutOptions): string {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${e(options.title)}</title>
 <meta name="description" content="${e(options.description)}">
-${options.noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}
+${robots ? `<meta name="robots" content="${e(robots)}">` : ''}
 <link rel="canonical" href="${e(canonical)}">
-<link rel="icon" href="${FAVICON}">
+${options.prev ? `<link rel="prev" href="${e(options.prev)}">` : ''}
+${options.next ? `<link rel="next" href="${e(options.next)}">` : ''}
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
 <link rel="alternate" type="application/rss+xml" title="The Internet Change Detector" href="${e(options.baseUrl)}/rss.xml">
+${options.rssPath ? `<link rel="alternate" type="application/rss+xml" title="${e(options.rssTitle ?? options.title)}" href="${e(options.baseUrl)}${e(options.rssPath)}">` : ''}
 <meta property="og:site_name" content="The Internet Change Detector">
 <meta property="og:type" content="${e(options.ogType ?? 'website')}">
 <meta property="og:title" content="${e(options.title)}">
@@ -54,6 +69,9 @@ ${options.noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}
 <meta property="og:image" content="${e(ogImage)}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:alt" content="${e(options.title)}">
+<meta property="og:locale" content="en_US">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="${e(options.title)}">
 <meta name="twitter:description" content="${e(options.description)}">
@@ -61,9 +79,11 @@ ${options.noindex ? '<meta name="robots" content="noindex,nofollow">' : ''}
 <meta name="theme-color" content="#0E1116">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@300..800&family=Martian+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="preload" as="style" href="${e(FONTS)}">
+<link rel="stylesheet" href="${e(FONTS)}" media="print" onload="this.media='all'">
+<noscript><link rel="stylesheet" href="${e(FONTS)}"></noscript>
 <style>${CSS}</style>
-${options.jsonLd ? `<script type="application/ld+json">${JSON.stringify(options.jsonLd).replace(/</g, '\\u003c')}</script>` : ''}
+${jsonLd.map((item) => `<script type="application/ld+json">${JSON.stringify(item).replace(/</g, '\\u003c')}</script>`).join('\n')}
 </head>
 <body>
 <header class="site">

@@ -1,4 +1,5 @@
 /** Side-by-side diff viewer: text, word-level and raw HTML modes. */
+import { changePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite, Snapshot } from '../../types';
 import { layout } from '../layout';
 import { DiffRow, diffWords } from '../../lib/diff';
@@ -69,7 +70,7 @@ export function diffPage(props: DiffProps): string {
   const body = `<div class="wrap">
   <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:18px;flex-wrap:wrap;padding:26px 0 18px;border-bottom:1px solid rgba(255,255,255,.09)">
     <div>
-      <a class="label" href="/changes/${e(change.slug)}">← BACK TO CHANGE EVENT</a>
+      <a class="label" href="${e(changePath(change))}">← BACK TO CHANGE EVENT</a>
       <h1 style="margin:12px 0 0;font-size:26px;letter-spacing:-.035em;font-weight:800">${e(site.title ?? hostOf(site.canonical_url))}
         <span class="mono" style="font-size:13px;font-weight:400;color:#93A0B0">${e(pathOf(site.canonical_url))}</span>
       </h1>
@@ -79,7 +80,7 @@ export function diffPage(props: DiffProps): string {
       ${modes
         .map(
           ([mode, label]) =>
-            `<a class="chip${props.mode === mode ? ' on' : ''}" href="/changes/${e(change.slug)}/diff?mode=${mode}">${label}</a>`,
+            `<a class="chip${props.mode === mode ? ' on' : ''}" href="${e(changePath(change))}/diff?mode=${mode}">${label}</a>`,
         )
         .join('')}
     </div>
@@ -149,8 +150,10 @@ export function diffPage(props: DiffProps): string {
 
   return layout({
     title: `Diff — ${change.headline}`,
+    // The change page is the one to rank; the diff is its evidence.
+    noindex: 'noindex,follow',
     description: change.summary,
-    path: `/changes/${change.slug}/diff`,
+    path: `${changePath(change)}/diff`,
     baseUrl: props.baseUrl,
     active: 'feed',
     body,

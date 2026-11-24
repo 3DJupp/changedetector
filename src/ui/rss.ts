@@ -1,4 +1,5 @@
 /** RSS 2.0 feeds: everything, per category, per site, and the daily digest. */
+import { changePath } from '../lib/paths';
 import type { ChangeEvent, MonitoredSite } from '../types';
 import { escapeHtml } from '../lib/html';
 
@@ -18,8 +19,8 @@ export function rssFeed(options: {
     .map(
       (change) => `  <item>
     <title>${e(change.headline)}</title>
-    <link>${options.baseUrl}/changes/${e(change.slug)}</link>
-    <guid isPermaLink="true">${options.baseUrl}/changes/${e(change.slug)}</guid>
+    <link>${options.baseUrl}${e(changePath(change))}</link>
+    <guid isPermaLink="false">${e(change.id)}</guid>
     <pubDate>${rfc822(change.detected_at)}</pubDate>
     <category>${e(change.site.category ?? 'Companies')}</category>
     <description>${e(

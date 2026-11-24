@@ -77,6 +77,8 @@ export type SiteStatus = 'ACTIVE' | 'PAUSED' | 'ERROR' | 'ARCHIVED';
 
 export interface MonitoredSite {
   id: string;
+  /** Readable URL key; null until assigned (the id works meanwhile). */
+  slug: string | null;
   url: string;
   canonical_url: string;
   host: string;

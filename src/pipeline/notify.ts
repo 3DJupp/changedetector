@@ -2,6 +2,7 @@
  * Notifications: email (Resend) and webhooks, driven off a durable outbox so a
  * delivery failure never loses a change event.
  */
+import { changePath } from '../lib/paths';
 import type { Env } from '../types';
 import { Repo } from '../db/repo';
 import { escapeHtml } from '../lib/html';
@@ -105,7 +106,7 @@ export async function sendEmail(env: Env, to: string, subject: string, html: str
 }
 
 function alertHtml(env: Env, row: PendingRow): string {
-  const url = `${env.PUBLIC_BASE_URL}/changes/${row.slug}`;
+  const url = `${env.PUBLIC_BASE_URL}${changePath({ slug: row.slug ?? '', headline: row.headline ?? '' })}`;
   return `<div style="font-family:-apple-system,Segoe UI,sans-serif;max-width:560px">
   <p style="font:600 11px/1 monospace;letter-spacing:.08em;color:#D63B42">CHANGE DETECTED</p>
   <h1 style="font-size:22px;line-height:1.2;margin:12px 0">${escapeHtml(row.headline ?? "")}</h1>
@@ -154,7 +155,7 @@ function digestHtml(env: Env, digest: DigestEmail, token: string | null): string
     .map(
       (change, index) => `<tr><td style="padding:14px 0;border-top:1px solid #E5E2DA;vertical-align:top;width:34px;font:500 15px monospace;color:#A8ADB4">${String(index + 1).padStart(2, '0')}</td>
   <td style="padding:14px 0;border-top:1px solid #E5E2DA">
-    <a href="${base}/changes/${escapeHtml(change.slug)}" style="font-size:16px;font-weight:700;color:#16181C;text-decoration:none">${escapeHtml(change.headline)}</a>
+    <a href="${base}${escapeHtml(changePath(change))}" style="font-size:16px;font-weight:700;color:#16181C;text-decoration:none">${escapeHtml(change.headline)}</a>
     <div style="font-size:13.5px;line-height:1.45;color:#5B6068;margin-top:4px">${escapeHtml(change.summary)}</div>
     ${change.delta ? `<div style="font:500 13px monospace;color:#C0332F;margin-top:6px">${escapeHtml(change.delta)}</div>` : ''}
   </td></tr>`,

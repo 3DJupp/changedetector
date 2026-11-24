@@ -1,4 +1,5 @@
 /** Sites index, about page and the public API reference. */
+import { sitePath } from '../../lib/paths';
 import type { MonitoredSite } from '../../types';
 import { CATEGORIES } from '../../types';
 import { layout } from '../layout';
@@ -33,7 +34,7 @@ export function sitesPage(props: {
       props.sites.length
         ? props.sites
             .map(
-              (site) => `<a class="row" href="/sites/${e(site.id)}">
+              (site) => `<a class="row" href="${e(sitePath(site))}">
       <span style="flex:1 1 240px;min-width:0">
         <span style="font-weight:600;font-size:14px">${e(site.title ?? hostOf(site.canonical_url))}</span>
         <span class="mono dim" style="display:block;font-size:9.5px;margin-top:3px;word-break:break-all">${e(site.canonical_url)}</span>

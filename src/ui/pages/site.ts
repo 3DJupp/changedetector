@@ -1,7 +1,9 @@
 /** Site page: identity, cadence, sparkline, change history, snapshot ledger. */
+import { breadcrumbJsonLd, metaDescription, SITE_NAME } from '../seo';
+import { categoryPath, changePath, sitePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite, Snapshot } from '../../types';
 import { layout } from '../layout';
-import { badge, e, hostOf, severityStyle, stampShort } from '../components';
+import { badge, e, hostOf, pathOf, severityStyle, stampShort } from '../components';
 import { COLORS } from '../theme';
 
 export interface SiteProps {
@@ -85,7 +87,7 @@ export function sitePage(props: SiteProps): string {
         ? props.changes
             .map((change) => {
               const s = severityStyle(change.severity);
-              return `<a class="timeline" href="/changes/${e(change.slug)}">
+              return `<a class="timeline" href="${e(changePath(change))}">
         <div class="mono" style="flex:0 0 118px;font-size:9.5px;color:#93A0B0;padding-top:4px">${e(stampShort(change.detected_at))}</div>
         <div style="flex:0 0 6px;padding-top:9px"><div style="width:6px;height:6px;background:${s.color}"></div></div>
         <div style="flex:1 1 260px;min-width:0">
@@ -126,13 +128,34 @@ export function sitePage(props: SiteProps): string {
   </section>
 </div>`;
 
+  const name = site.title ?? hostOf(site.canonical_url);
   return layout({
-    title: `${site.title ?? hostOf(site.canonical_url)} — monitored page`,
-    description: `Change history and snapshot ledger for ${site.canonical_url}. ${site.change_count} changes recorded across ${site.snapshot_count} captures.`,
-    path: `/sites/${site.id}`,
+    title: `${name}: change history — ${SITE_NAME}`,
+    description: metaDescription(
+      `Every change to ${hostOf(site.canonical_url)}${pathOf(site.canonical_url) === hostOf(site.canonical_url) ? '' : pathOf(site.canonical_url)} with before and after: ${site.change_count} change${site.change_count === 1 ? '' : 's'} across ${site.snapshot_count} verifiable captures.`,
+    ),
+    path: sitePath(site),
     ogImage: `${props.baseUrl}/sites/${site.id}/og.png`,
     baseUrl: props.baseUrl,
     active: 'sites',
+    rssPath: `/sites/${site.slug ?? site.id}/rss.xml`,
+    rssTitle: `Changes — ${name}`,
     body,
+    jsonLd: [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'CollectionPage',
+        name: `${name}: change history`,
+        url: `${props.baseUrl}${sitePath(site)}`,
+        isPartOf: { '@id': `${props.baseUrl}/#website` },
+        about: { '@type': 'WebPage', url: site.canonical_url, name },
+        dateModified: site.last_changed_at ? new Date(site.last_changed_at * 1000).toISOString() : undefined,
+      },
+      breadcrumbJsonLd(props.baseUrl, [
+        { name: 'Monitored pages', path: '/sites' },
+        { name: site.category, path: categoryPath(site.category) },
+        { name, path: sitePath(site) },
+      ]),
+    ],
   });
 }

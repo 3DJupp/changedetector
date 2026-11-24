@@ -1,4 +1,6 @@
 /** The public change event page — the most important surface in the product. */
+import { breadcrumbJsonLd, metaDescription, organizationJsonLd, SITE_NAME } from '../seo';
+import { categoryPath, changePath, sitePath } from '../../lib/paths';
 import type { ChangeEvent, MonitoredSite, Snapshot } from '../../types';
 import { layout } from '../layout';
 import { badge, e, hostOf, pathOf, severityStyle, shortCid, stamp, stampShort } from '../components';
@@ -19,7 +21,7 @@ export interface ChangeProps {
 export function changePage(props: ChangeProps): string {
   const { change, site, previous, current } = props;
   const s = severityStyle(change.severity);
-  const shareUrl = `${props.baseUrl}/changes/${change.slug}`;
+  const shareUrl = `${props.baseUrl}${changePath(change)}`;
   const shareText = `${change.headline} — detected ${stampShort(change.detected_at)}`;
 
   const beforeAfter =
@@ -63,7 +65,7 @@ export function changePage(props: ChangeProps): string {
     <div class="meta-row">
       ${badge(change.severity, true)}
       <span class="mono" style="font-size:10px;color:#8892A0">${e(stamp(change.detected_at))}</span>
-      <a class="mono" style="font-size:10px" href="/sites/${e(site.id)}">${e(hostOf(site.canonical_url))}${e(pathOf(site.canonical_url) === hostOf(site.canonical_url) ? '' : pathOf(site.canonical_url))}</a>
+      <a class="mono" style="font-size:10px" href="${e(sitePath(site))}">${e(hostOf(site.canonical_url))}${e(pathOf(site.canonical_url) === hostOf(site.canonical_url) ? '' : pathOf(site.canonical_url))}</a>
       <span class="mono" style="font-size:10px;color:#93A0B0">${e(change.change_type)}</span>
     </div>
   </section>
@@ -76,7 +78,7 @@ export function changePage(props: ChangeProps): string {
       <p style="margin:0;font-size:16px;line-height:1.5;text-wrap:pretty">${e(change.summary)}</p>
       ${props.aiModel ? `<div class="label" style="margin-top:10px">SUMMARY REVIEWED BY ${e(props.aiModel.toUpperCase())}</div>` : ''}
       <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
-        <a class="btn btn-ghost btn-sm" href="/changes/${e(change.slug)}/diff">View full diff →</a>
+        <a class="btn btn-ghost btn-sm" href="${e(changePath(change))}/diff">View full diff →</a>
         ${previous ? `<a class="btn btn-ghost btn-sm" href="/snapshots/${e(previous.id)}">Previous version</a>` : ''}
         <a class="btn btn-ghost btn-sm" href="/snapshots/${e(current.id)}">Current version</a>
       </div>
@@ -165,26 +167,43 @@ export function changePage(props: ChangeProps): string {
   </section>
 </div>`;
 
-  const ogDescription = `${change.summary} Detected ${stampShort(change.detected_at)}.`;
+  const ogDescription = metaDescription(`${change.summary} Detected ${stampShort(change.detected_at)}.`);
+  const siteName = site.title ?? hostOf(site.canonical_url);
+  const published = new Date(change.detected_at * 1000).toISOString();
   return layout({
-    title: change.headline,
-    description: ogDescription.slice(0, 300),
-    path: `/changes/${change.slug}`,
+    title: `${change.headline} — ${SITE_NAME}`,
+    description: ogDescription,
+    path: changePath(change),
     baseUrl: props.baseUrl,
     active: 'feed',
     narrow: true,
     ogType: 'article',
     ogImage: `${props.baseUrl}/changes/${change.slug}/og.png`,
     body,
-    jsonLd: {
-      '@context': 'https://schema.org',
-      '@type': 'NewsArticle',
-      headline: change.headline,
-      description: change.summary,
-      datePublished: new Date(change.detected_at * 1000).toISOString(),
-      url: shareUrl,
-      about: { '@type': 'WebPage', url: site.canonical_url, name: site.title ?? site.host },
-      identifier: current.cid ?? undefined,
-    },
+    jsonLd: [
+      {
+        '@context': 'https://schema.org',
+        '@type': 'NewsArticle',
+        headline: change.headline.slice(0, 110),
+        description: change.summary,
+        datePublished: published,
+        dateModified: published,
+        url: shareUrl,
+        mainEntityOfPage: shareUrl,
+        image: [`${props.baseUrl}/changes/${change.slug}/og.png`],
+        articleSection: site.category,
+        author: { '@type': 'Organization', name: SITE_NAME, url: `${props.baseUrl}/` },
+        publisher: organizationJsonLd(props.baseUrl),
+        about: { '@type': 'WebPage', url: site.canonical_url, name: siteName },
+        isBasedOn: current.cid ? `ipfs://${current.cid}` : site.canonical_url,
+        identifier: current.cid ?? undefined,
+      },
+      breadcrumbJsonLd(props.baseUrl, [
+        { name: 'Changes', path: '/' },
+        { name: site.category, path: categoryPath(site.category) },
+        { name: siteName, path: sitePath(site) },
+        { name: change.headline, path: changePath(change) },
+      ]),
+    ],
   });
 }

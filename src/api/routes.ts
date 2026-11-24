@@ -9,6 +9,7 @@ import { rawR2Store, createContentStore } from '../store';
 import { sha256Hex } from '../lib/hash';
 import { buildDigest } from '../pipeline/digest';
 import { hybridSearch } from '../lib/semantic';
+import { changePath } from '../lib/paths';
 import { confirmationHtml, sendEmail } from '../pipeline/notify';
 import { html } from '../ui/layout';
 import { confirmPage, subscribeResultPage, unsubscribePage } from '../ui/pages/subscription';
@@ -19,6 +20,7 @@ const CACHE_LONG = 3600;
 function siteDto(site: MonitoredSite) {
   return {
     id: site.id,
+    slug: site.slug,
     url: site.canonical_url,
     title: site.title,
     category: site.category,
@@ -66,7 +68,7 @@ export function changeDto(
     published: Boolean(change.published),
     previousSnapshot: { id: change.previous_snapshot_id, cid: extra.previousCid ?? null },
     currentSnapshot: { id: change.current_snapshot_id, cid: extra.currentCid ?? null, capturedAt: extra.capturedAt ?? null },
-    url: `${baseUrl}/changes/${change.slug}`,
+    url: `${baseUrl}${changePath(change)}`,
     ogImage: `${baseUrl}/changes/${change.slug}/og.png`,
   };
 }
@@ -188,7 +190,7 @@ export function registerApiRoutes(router: Router): void {
             change.before_value ?? '',
             change.after_value ?? '',
             change.delta ?? '',
-            `${ctx.baseUrl}/changes/${change.slug}`,
+            `${ctx.baseUrl}${changePath(change)}`,
           ]
             .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
             .join(','),
