@@ -9,6 +9,7 @@
 -- ---------------------------------------------------------------------------
 CREATE TABLE monitored_sites (
   id                 TEXT PRIMARY KEY,
+  slug               TEXT,                             -- readable URL key; set on creation, backfilled by the sweep
   url                TEXT NOT NULL,
   canonical_url      TEXT NOT NULL,
   host               TEXT NOT NULL,
@@ -37,6 +38,7 @@ CREATE UNIQUE INDEX idx_sites_canonical ON monitored_sites(canonical_url);
 CREATE INDEX idx_sites_due ON monitored_sites(status, next_check_at);
 CREATE INDEX idx_sites_category ON monitored_sites(category, last_changed_at DESC);
 CREATE INDEX idx_sites_host ON monitored_sites(host);
+CREATE UNIQUE INDEX idx_sites_slug ON monitored_sites(slug) WHERE slug IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Snapshots — one row per capture, changed or not.
@@ -147,8 +149,9 @@ CREATE TABLE users (
   id            TEXT PRIMARY KEY,
   email         TEXT NOT NULL,
   verified      INTEGER NOT NULL DEFAULT 0,
-  token         TEXT NOT NULL,          -- opaque manage/unsubscribe token
-  digest_optin  INTEGER NOT NULL DEFAULT 1,
+  token         TEXT NOT NULL,          -- opaque confirm/unsubscribe token
+  digest_optin  INTEGER NOT NULL DEFAULT 0,   -- 0 off, 1 on, 2 requested but not yet confirmed
+  confirm_sent_at INTEGER,              -- rate-limits confirmation emails per address
   created_at    INTEGER NOT NULL
 );
 CREATE UNIQUE INDEX idx_users_email ON users(email);
@@ -162,6 +165,7 @@ CREATE TABLE subscriptions (
   min_score   INTEGER NOT NULL DEFAULT 40,
   channel     TEXT NOT NULL DEFAULT 'EMAIL',   -- EMAIL | WEBHOOK | RSS
   target      TEXT,                            -- webhook URL when channel = WEBHOOK
+  pending     INTEGER NOT NULL DEFAULT 1,      -- 1 until the address owner clicks the confirmation link
   created_at  INTEGER NOT NULL
 );
 CREATE INDEX idx_subs_site ON subscriptions(site_id);
@@ -176,6 +180,7 @@ CREATE TABLE notifications (
   status      TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | SENT | FAILED | SKIPPED
   attempts    INTEGER NOT NULL DEFAULT 0,
   error       TEXT,
+  payload     TEXT,                            -- digest day, or webhook target URL
   created_at  INTEGER NOT NULL,
   sent_at     INTEGER
 );
@@ -205,3 +210,22 @@ CREATE TABLE digests (
   stats      TEXT,              -- JSON
   created_at INTEGER NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- Public "watch this page" suggestions, moderated in the admin console.
+-- One row per canonical URL; repeat suggestions add a vote instead.
+-- ---------------------------------------------------------------------------
+CREATE TABLE site_suggestions (
+  id             TEXT PRIMARY KEY,
+  url            TEXT NOT NULL,
+  canonical_url  TEXT NOT NULL,
+  category       TEXT,
+  reason         TEXT,
+  status         TEXT NOT NULL DEFAULT 'PENDING',   -- PENDING | APPROVED | REJECTED
+  votes          INTEGER NOT NULL DEFAULT 1,
+  site_id        TEXT REFERENCES monitored_sites(id) ON DELETE SET NULL,
+  created_at     INTEGER NOT NULL,
+  decided_at     INTEGER
+);
+CREATE UNIQUE INDEX idx_suggestions_canonical ON site_suggestions(canonical_url);
+CREATE INDEX idx_suggestions_queue ON site_suggestions(status, votes DESC, created_at);
